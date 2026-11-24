@@ -1,0 +1,7 @@
+steno_hybrid
+steno8
+*_rebuilt
+*_prebuilt
+__pycache__/
+*.pyc
+build_warn.txt

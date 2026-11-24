@@ -1,0 +1,56 @@
+{
+  "zeros": {
+    "raw": 1048576,
+    "steno_v5": 1072,
+    "zlib6": 1039,
+    "zlib9": 1039,
+    "lzma3": 284,
+    "encode_wall_seconds_including_process": 0.013177,
+    "roundtrip": "PASS"
+  },
+  "periodic": {
+    "raw": 1048576,
+    "steno_v5": 2618,
+    "zlib6": 2589,
+    "zlib9": 2589,
+    "lzma3": 304,
+    "encode_wall_seconds_including_process": 0.018166,
+    "roundtrip": "PASS"
+  },
+  "text": {
+    "raw": 1048576,
+    "steno_v5": 3161,
+    "zlib6": 3128,
+    "zlib9": 3128,
+    "lzma3": 344,
+    "encode_wall_seconds_including_process": 0.019472,
+    "roundtrip": "PASS"
+  },
+  "random": {
+    "raw": 1048576,
+    "steno_v5": 1048609,
+    "zlib6": 1048902,
+    "zlib9": 1048902,
+    "lzma3": 1048688,
+    "encode_wall_seconds_including_process": 0.07222,
+    "roundtrip": "PASS"
+  },
+  "json": {
+    "raw": 1048576,
+    "steno_v5": 3691,
+    "zlib6": 3658,
+    "zlib9": 3658,
+    "lzma3": 364,
+    "encode_wall_seconds_including_process": 0.023593,
+    "roundtrip": "PASS"
+  },
+  "numeric": {
+    "raw": 1048576,
+    "steno_v5": 362610,
+    "zlib6": 362577,
+    "zlib9": 362579,
+    "lzma3": 67848,
+    "encode_wall_seconds_including_process": 0.148207,
+    "roundtrip": "PASS"
+  }
+}
