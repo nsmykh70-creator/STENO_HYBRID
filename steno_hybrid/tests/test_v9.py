@@ -1,5 +1,5 @@
-import random, subprocess, tempfile, pathlib, struct
-EXE=pathlib.Path(__file__).resolve().parents[1]/'steno9'
+import os, random, subprocess, tempfile, pathlib, struct
+EXE=pathlib.Path(os.environ.get('STENO_EXE') or pathlib.Path(__file__).resolve().parents[1]/'steno9')
 r=random.Random(88421)
 text='Русский текст и English text 中文 日本語 ไทย — UTF-8 проверка. '*3000
 jsondata=''.join('{"users":[{"id":%d,"name":"user_%d","active":true}]}\n'%(i,i) for i in range(1000))
@@ -37,6 +37,15 @@ with tempfile.TemporaryDirectory() as td:
   run('decode',arc,out)
   assert out.read_bytes()==mixed,(lvl,bs,win)
  print('parameter grid: PASS')
+ # глубина цепочек и детерминизм числа потоков
+ src.write_bytes(mixed)
+ run('encode',src,arc,['6','1048576','262144','1','1']); base1=arc.read_bytes()
+ run('encode',src,arc,['6','1048576','262144','1','4']); assert arc.read_bytes()==base1,'threads changed output'
+ for d in ['8','64']:
+  run('encode',src,arc,['6','1048576','262144',d,'2'])
+  run('decode',arc,out)
+  assert out.read_bytes()==mixed,('depth',d)
+ print(f'depth/thread determinism: PASS (depth1 size {len(base1)}, depth8 {"smaller" if len(arc.read_bytes())<=len(base1) else "LARGER?"})')
  # отбраковка повреждённых архивов
  run('encode',src,arc)
  good=arc.read_bytes()

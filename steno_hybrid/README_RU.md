@@ -21,16 +21,20 @@
 
 ```bash
 g++ -O3 -DNDEBUG -std=c++17 -Wall -Wextra -pedantic native.cpp -lz -o steno9
+# опционально, с libdeflate (быстрее; словарные блоки всё равно идут через zlib):
+g++ -O3 -DNDEBUG -DHAVE_LIBDEFLATE -std=c++17 -Wall -Wextra -pedantic native.cpp -ldeflate -lz -o steno9
 ```
 
 ## Использование
 
 ```bash
-./steno9 encode input.bin output.stn [level=6] [block=1048576] [window=262144]
+./steno9 encode input.bin output.stn [level=6] [block=1048576] [window=262144] [depth=1] [threads=0]
 ./steno9 decode output.stn restored.bin
 ```
 
-Уровень zlib: 1–9. Размер блока: 4 КиБ–4 МиБ. Окно: 4 КиБ–4 МиБ. Декодер определяет формат
+Уровень zlib: 1–9. Размер блока: 4 КиБ–4 МиБ. Окно: 4 КиБ–4 МиБ. depth: 1–1024 (глубина
+просмотра цепочки кандидатов, 1 = поведение v9). threads: 0 = авто (энкод по блокам; байты
+архива идентичны при любом числе потоков). Декодер определяет формат
 по сигнатуре STN9.
 
 ## Важные ограничения
