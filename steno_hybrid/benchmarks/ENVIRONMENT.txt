@@ -1,0 +1,7 @@
+Compiler: g++ (C++17, -O3 -DNDEBUG)
+Entropy codec: system zlib via libz
+Reference codecs: Python 3.13 zlib.compress(level=6), lzma.compress(preset=3)
+Corpus size: 1 MiB each, synthetic
+Repetitions: 5, median
+STENO wall: subprocess launch + file read/write + codec; STENO kernel: timer inside executable around encode/decode operation
+Reference wall: Python in-process codec function only

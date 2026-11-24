@@ -1,11 +1,32 @@
-# STN7 container format (prototype)
+# STN8 container format (little-endian)
 
-All integers are little-endian. Header: `STN7`, version/flags byte `1`, three reserved zero bytes, original size u64, block count u32 (20 bytes total).
+## File header (20 bytes)
 
-Each block: mode u8, raw size u32, payload size u32, CRC32 of decoded block u32, payload bytes.
+| Field | Size | Meaning |
+|---|---:|---|
+| Magic | 4 | ASCII `STN8` |
+| Version | 1 | `1` |
+| Flags | 3 | must be zero |
+| Original size | 8 | total uncompressed bytes |
+| Block count | 4 | number of blocks |
 
-Modes: 0 RAW; 1 RLE pairs `(run_minus_one, byte)`; 2 zlib; 3 first-order byte delta + zlib; 4 static byte rANS; 5 first-order byte delta + rANS; 6 previous-byte-context XOR predictor + rANS; 7 stride-2 delta + rANS; 8 stride-4 delta + rANS.
+## Block header (17 bytes)
 
-Mode 6 stores a 256-byte predictor table before the rANS stream. Predictor for context `c` is the most frequent next byte observed after byte `c` in that block; ties choose the lowest byte value. Context for the first byte is zero. Residual is `input[i] XOR predictor[previous_byte]`.
+| Field | Size | Meaning |
+|---|---:|---|
+| Mode | 1 | 0 RAW, 1 zlib(raw), 2 zlib(LZ77 tokens) |
+| Raw size | 4 | decoded bytes in this block |
+| Payload size | 4 | stored bytes |
+| Transformed size | 4 | decompressed token-stream size for mode 2; zero otherwise |
+| CRC32 | 4 | CRC of original block bytes |
 
-The encoder compares complete payload lengths for each block and selects the smallest candidate; RAW is always available. This is a research prototype, not yet a stable interoperable format. Decoder validates block bounds, total size, CRC and trailing bytes.
+Payload follows immediately.
+
+## LZ77 token stream (mode 2 before DEFLATE)
+
+- Literal: byte `0`, then one literal byte.
+- Match: byte `1`, then unsigned base-128 varint length, then unsigned base-128 varint distance.
+- Match length range: 4–258. Distance range: 1–32768.
+- Decoder copies matches bytewise, supporting overlapping references.
+
+Every block is independently decoded and CRC-checked. The file is rejected if block sizes do not sum to the declared original size or if trailing bytes remain.

@@ -1,34 +1,45 @@
-import json, os, random, subprocess, tempfile, time, zlib, lzma
-from pathlib import Path
-ROOT=Path(__file__).resolve().parents[1]; BIN=ROOT/'steno_hybrid'
-rng=random.Random(1234); N=1024*1024
-cases={
- 'zeros':bytes(N),
- 'periodic':(b'ABRACADABRA-0123456789-'*(N//23+1))[:N],
- 'text_ru_en_cjk_thai':(('Русский текст English text 世界 日本語 ภาษาไทย — данные и алгоритмы.\n'*20000).encode()[:N]).ljust(N,b' '),
- 'random':rng.randbytes(N),
- 'json':((' {"id":123,"name":"item","active":true,"values":[1,2,3,4,5],"text":"example"},\n'*20000).encode()[:N]).ljust(N,b' '),
- 'stride2':bytes((i%251 for i in range(N))),
- 'context_runs':bytes(((i//32)%16 for i in range(N))),
+import json, lzma, os, pathlib, random, statistics, subprocess, tempfile, time, zlib
+ROOT=pathlib.Path(__file__).resolve().parents[1]; EXE=ROOT/'steno8'; R=random.Random(20261124); N=1024*1024
+text=('Это тестовый многоязычный текст. The quick brown fox jumps over the lazy dog. 中文测试 日本語 テスト ภาษาไทย.\n'*12000).encode()[:N]
+jsondata=(b'{"id":123,"name":"example_user","active":true,"values":[1,2,3,4,5],"message":"hello world"}\n'*20000)[:N]
+data={
+ 'zeros':bytes(N),'periodic':(b'ABRACADABRA-0123456789-'*((N//23)+1))[:N],
+ 'multilingual':(text*((N//len(text))+1))[:N], 'random':bytes(R.randrange(256) for _ in range(N)),
+ 'json':(jsondata*((N//len(jsondata))+1))[:N], 'stride2':bytes(i%251 for i in range(N)),
+ 'long_runs':(b'A'*4096+b'B'*4096+b'C'*4096+b'D'*4096)*(N//16384)
 }
-def timed_cli(args):
- t=time.perf_counter();p=subprocess.run([str(BIN),*map(str,args)],capture_output=True,text=True);wall=time.perf_counter()-t
- if p.returncode: raise RuntimeError(p.stderr)
- # CLI reports kernel duration; wall includes process startup and file I/O.
- import re
- m=re.search(r'seconds=([0-9.eE+-]+)',p.stderr); internal=float(m.group(1)) if m else None
- return wall,internal,p.stderr.strip()
+def timed(fn,reps=5):
+ vals=[]
+ for _ in range(reps):
+  t=time.perf_counter();v=fn();vals.append(time.perf_counter()-t)
+ return v,statistics.median(vals)
+def cli(mode,src,dst):
+ t=time.perf_counter();p=subprocess.run([str(EXE),mode,str(src),str(dst)],capture_output=True,check=True);wall=time.perf_counter()-t
+ # parse kernel seconds from stderr
+ s=p.stderr.decode(); kernel=float(s.split('seconds=')[1].split()[0]);return wall,kernel
 rows=[]
-with tempfile.TemporaryDirectory() as d:
- for name,data in cases.items():
-  src=Path(d)/'in'; arc=Path(d)/'arc'; out=Path(d)/'out';src.write_bytes(data)
-  ew,ei,es=timed_cli(['encode',src,arc,6,262144]);dw,di,ds=timed_cli(['decode',arc,out,6,262144]);
-  if out.read_bytes()!=data: raise RuntimeError('roundtrip failed: '+name)
-  z=zlib.compress(data,6); l=lzma.compress(data,preset=3)
-  rows.append({'case':name,'raw_bytes':len(data),'steno_bytes':arc.stat().st_size,'zlib6_bytes':len(z),'lzma3_bytes':len(l),'encode_wall_s':ew,'encode_kernel_s':ei,'decode_wall_s':dw,'decode_kernel_s':di,'encode_wall_MiB_s':len(data)/1048576/ew,'decode_wall_MiB_s':len(data)/1048576/dw,'roundtrip':'PASS'})
-result={'version':'STN7','note':'wall includes process startup and file I/O; kernel time is reported by codec around encode/decode only','results':rows}
-(ROOT/'benchmarks'/'results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
-with (ROOT/'benchmarks'/'results.txt').open('w') as f:
- f.write(result['note']+'\n')
- for r in rows:f.write(f"{r['case']}: size={r['steno_bytes']} zlib={r['zlib6_bytes']} lzma={r['lzma3_bytes']} enc={r['encode_kernel_s']:.6f}s ({r['encode_wall_MiB_s']:.2f} MiB/s wall) dec={r['decode_kernel_s']:.6f}s ({r['decode_wall_MiB_s']:.2f} MiB/s wall) {r['roundtrip']}\n")
+with tempfile.TemporaryDirectory() as td:
+ td=pathlib.Path(td);src=td/'in';arc=td/'arc';out=td/'out'
+ for name,raw in data.items():
+  src.write_bytes(raw); encwall=[];enck=[];decwall=[];deck=[]
+  for _ in range(5):
+   w,k=cli('encode',src,arc);encwall.append(w);enck.append(k)
+  packed=arc.read_bytes()
+  for _ in range(5):
+   w,k=cli('decode',arc,out);decwall.append(w);deck.append(k)
+  assert out.read_bytes()==raw
+  zc,zt=timed(lambda:zlib.compress(raw,6)); zd, zdt=timed(lambda:zlib.decompress(zc))
+  lc,lt=timed(lambda:lzma.compress(raw,preset=3)); ld,ldt=timed(lambda:lzma.decompress(lc))
+  rows.append({'corpus':name,'raw':len(raw),'steno':len(packed),'zlib':len(zc),'lzma3':len(lc),
+   'steno_encode_wall_s':statistics.median(encwall),'steno_encode_kernel_s':statistics.median(enck),
+   'steno_decode_wall_s':statistics.median(decwall),'steno_decode_kernel_s':statistics.median(deck),
+   'zlib_encode_s':zt,'zlib_decode_s':zdt,'lzma_encode_s':lt,'lzma_decode_s':ldt})
+(ROOT/'benchmarks'/'results.json').write_text(json.dumps(rows,indent=2),encoding='utf-8')
+with (ROOT/'benchmarks'/'results.txt').open('w',encoding='utf-8') as f:
+ f.write('STENO HYBRID v8 benchmark; 1 MiB synthetic corpora; 5 repetitions; medians; Python zlib/LZMA baselines.\n')
+ f.write('Times include process wall time for STENO and in-process codec calls for baselines.\n\n')
+ for x in rows:
+  f.write(f"{x['corpus']}: sizes STENO={x['steno']} zlib={x['zlib']} LZMA3={x['lzma3']} bytes; ")
+  f.write(f"STENO enc wall/kernel={x['steno_encode_wall_s']:.6f}/{x['steno_encode_kernel_s']:.6f}s, dec={x['steno_decode_wall_s']:.6f}/{x['steno_decode_kernel_s']:.6f}s; ")
+  f.write(f"zlib enc/dec={x['zlib_encode_s']:.6f}/{x['zlib_decode_s']:.6f}s; LZMA enc/dec={x['lzma_encode_s']:.6f}/{x['lzma_decode_s']:.6f}s\n")
 print((ROOT/'benchmarks'/'results.txt').read_text())
