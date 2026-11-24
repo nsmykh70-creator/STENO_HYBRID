@@ -106,7 +106,9 @@ static vector<uint8_t> encode(const vector<uint8_t>&in,int level,size_t bs,size_
   vector<uint8_t> best=a;uint8_t mode=0,flags=0;
   auto z1=deflate_raw(a,level,{});
   if(z1.size()<best.size()){best=move(z1);mode=1;}
-  if(!dict.empty()){auto zd=deflate_raw(a,level,dict);if(zd.size()<best.size()){best=move(zd);mode=1;flags=1;}}
+  // Dict pass only makes sense when plain DEFLATE actually compressed the block;
+  // on incompressible data it would double the encode time for nothing.
+  if(!dict.empty()&&z1.size()<n){auto zd=deflate_raw(a,level,dict);if(zd.size()<best.size()){best=move(zd);mode=1;flags=1;}}
   vector<uint8_t> tok;
   if(likely_repetitive(a)){tok=tokenize(a,window);auto zt=deflate_raw(tok,level,{});if(zt.size()<best.size()){best=move(zt);mode=2;}}
   o.push_back(mode);o.push_back(flags);put32(o,uint32_t(n));put32(o,uint32_t(best.size()));put32(o,mode==2?uint32_t(tok.size()):0);put32(o,crc(a.data(),a.size()));
