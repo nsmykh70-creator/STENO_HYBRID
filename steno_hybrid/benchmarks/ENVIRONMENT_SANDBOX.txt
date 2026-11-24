@@ -1,0 +1,2 @@
+Sandbox: Linux 5.10 x86_64, 2 vCPU, g++ 14.2.0-19 (Debian), zlib 1.4
+Benchmarks run 2026-11-24 by agent; kernel times (codec only, no file I/O).
