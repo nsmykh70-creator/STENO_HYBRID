@@ -1,58 +1,104 @@
-[
-  {
-    "case": "empty",
-    "raw": 0,
-    "steno_v6": 20,
-    "zlib6": 8,
-    "lzma3": 32
-  },
-  {
-    "case": "all_bytes",
-    "raw": 16384,
-    "steno_v6": 72,
-    "zlib6": 408,
-    "lzma3": 352
-  },
-  {
-    "case": "zeros",
-    "raw": 1048576,
-    "steno_v6": 549,
-    "zlib6": 1039,
-    "lzma3": 284
-  },
-  {
-    "case": "periodic",
-    "raw": 1048576,
-    "steno_v6": 1585,
-    "zlib6": 1552,
-    "lzma3": 288
-  },
-  {
-    "case": "text",
-    "raw": 1048576,
-    "steno_v6": 3705,
-    "zlib6": 3672,
-    "lzma3": 364
-  },
-  {
-    "case": "random",
-    "raw": 1048576,
-    "steno_v6": 1048609,
-    "zlib6": 1048902,
-    "lzma3": 1048688
-  },
-  {
-    "case": "json",
-    "raw": 1048576,
-    "steno_v6": 3165,
-    "zlib6": 3132,
-    "lzma3": 344
-  },
-  {
-    "case": "delta",
-    "raw": 1048576,
-    "steno_v6": 1075,
-    "zlib6": 5545,
-    "lzma3": 532
-  }
-]
+{
+  "version": "STN7",
+  "note": "wall includes process startup and file I/O; kernel time is reported by codec around encode/decode only",
+  "results": [
+    {
+      "case": "zeros",
+      "raw_bytes": 1048576,
+      "steno_bytes": 1180,
+      "zlib6_bytes": 1039,
+      "lzma3_bytes": 284,
+      "encode_wall_s": 0.03741639800000485,
+      "encode_kernel_s": 0.0323513,
+      "decode_wall_s": 0.00790019900000516,
+      "decode_kernel_s": 0.00294019,
+      "encode_wall_MiB_s": 26.726249811643292,
+      "decode_wall_MiB_s": 126.57908996967633,
+      "roundtrip": "PASS"
+    },
+    {
+      "case": "periodic",
+      "raw_bytes": 1048576,
+      "steno_bytes": 2790,
+      "zlib6_bytes": 2589,
+      "lzma3_bytes": 304,
+      "encode_wall_s": 0.04564732699986962,
+      "encode_kernel_s": 0.04055,
+      "decode_wall_s": 0.008333061000030284,
+      "decode_kernel_s": 0.00330335,
+      "encode_wall_MiB_s": 21.907087790767164,
+      "decode_wall_MiB_s": 120.00392172772595,
+      "roundtrip": "PASS"
+    },
+    {
+      "case": "text_ru_en_cjk_thai",
+      "raw_bytes": 1048576,
+      "steno_bytes": 4233,
+      "zlib6_bytes": 3707,
+      "lzma3_bytes": 396,
+      "encode_wall_s": 0.04751529300006041,
+      "encode_kernel_s": 0.0429642,
+      "decode_wall_s": 0.0034849200001190184,
+      "decode_kernel_s": 0.00106817,
+      "encode_wall_MiB_s": 21.045855699526648,
+      "decode_wall_MiB_s": 286.9506330032964,
+      "roundtrip": "PASS"
+    },
+    {
+      "case": "random",
+      "raw_bytes": 1048576,
+      "steno_bytes": 1048648,
+      "zlib6_bytes": 1048902,
+      "lzma3_bytes": 1048688,
+      "encode_wall_s": 0.10416342099983922,
+      "encode_kernel_s": 0.0962299,
+      "decode_wall_s": 0.005598044999942431,
+      "decode_kernel_s": 0.000827107,
+      "encode_wall_MiB_s": 9.60029912997523,
+      "decode_wall_MiB_s": 178.63379090562577,
+      "roundtrip": "PASS"
+    },
+    {
+      "case": "json",
+      "raw_bytes": 1048576,
+      "steno_bytes": 4022,
+      "zlib6_bytes": 3654,
+      "lzma3_bytes": 360,
+      "encode_wall_s": 0.04637270400007765,
+      "encode_kernel_s": 0.0414459,
+      "decode_wall_s": 0.004090718999805176,
+      "decode_kernel_s": 0.0012695,
+      "encode_wall_MiB_s": 21.56440995975403,
+      "decode_wall_MiB_s": 244.45580350242238,
+      "roundtrip": "PASS"
+    },
+    {
+      "case": "stride2",
+      "raw_bytes": 1048576,
+      "steno_bytes": 3256,
+      "zlib6_bytes": 4390,
+      "lzma3_bytes": 512,
+      "encode_wall_s": 0.0432890789998055,
+      "encode_kernel_s": 0.0385845,
+      "decode_wall_s": 0.010299529999883816,
+      "decode_kernel_s": 0.00787852,
+      "encode_wall_MiB_s": 23.100514566375807,
+      "decode_wall_MiB_s": 97.09180904480888,
+      "roundtrip": "PASS"
+    },
+    {
+      "case": "context_runs",
+      "raw_bytes": 1048576,
+      "steno_bytes": 4856,
+      "zlib6_bytes": 4626,
+      "lzma3_bytes": 320,
+      "encode_wall_s": 0.04446779900013098,
+      "encode_kernel_s": 0.0397259,
+      "decode_wall_s": 0.003235318999941228,
+      "decode_kernel_s": 0.000996719,
+      "encode_wall_MiB_s": 22.48818296576933,
+      "decode_wall_MiB_s": 309.0885319247239,
+      "roundtrip": "PASS"
+    }
+  ]
+}

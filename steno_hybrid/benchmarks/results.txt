@@ -1,8 +1,8 @@
-empty: raw=0 STENO=20 zlib6=8 LZMA3=32
-all_bytes: raw=16384 STENO=72 zlib6=408 LZMA3=352
-zeros: raw=1048576 STENO=549 zlib6=1039 LZMA3=284
-periodic: raw=1048576 STENO=1585 zlib6=1552 LZMA3=288
-text: raw=1048576 STENO=3705 zlib6=3672 LZMA3=364
-random: raw=1048576 STENO=1048609 zlib6=1048902 LZMA3=1048688
-json: raw=1048576 STENO=3165 zlib6=3132 LZMA3=344
-delta: raw=1048576 STENO=1075 zlib6=5545 LZMA3=532
+wall includes process startup and file I/O; kernel time is reported by codec around encode/decode only
+zeros: size=1180 zlib=1039 lzma=284 enc=0.032351s (26.73 MiB/s wall) dec=0.002940s (126.58 MiB/s wall) PASS
+periodic: size=2790 zlib=2589 lzma=304 enc=0.040550s (21.91 MiB/s wall) dec=0.003303s (120.00 MiB/s wall) PASS
+text_ru_en_cjk_thai: size=4233 zlib=3707 lzma=396 enc=0.042964s (21.05 MiB/s wall) dec=0.001068s (286.95 MiB/s wall) PASS
+random: size=1048648 zlib=1048902 lzma=1048688 enc=0.096230s (9.60 MiB/s wall) dec=0.000827s (178.63 MiB/s wall) PASS
+json: size=4022 zlib=3654 lzma=360 enc=0.041446s (21.56 MiB/s wall) dec=0.001270s (244.46 MiB/s wall) PASS
+stride2: size=3256 zlib=4390 lzma=512 enc=0.038585s (23.10 MiB/s wall) dec=0.007879s (97.09 MiB/s wall) PASS
+context_runs: size=4856 zlib=4626 lzma=320 enc=0.039726s (22.49 MiB/s wall) dec=0.000997s (309.09 MiB/s wall) PASS

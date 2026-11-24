@@ -1,11 +1,11 @@
-# STENO HYBRID v6 container format
+# STN7 container format (prototype)
 
-All integers are little-endian. File header (20 bytes): `STN6`, version/flags/reserved (4 bytes; version=1, rest zero), original size u64, block count u32.
+All integers are little-endian. Header: `STN7`, version/flags byte `1`, three reserved zero bytes, original size u64, block count u32 (20 bytes total).
 
-Each block: mode u8, uncompressed length u32, payload length u32, CRC32 of uncompressed bytes u32, then payload. Maximum block size is 4 MiB.
+Each block: mode u8, raw size u32, payload size u32, CRC32 of decoded block u32, payload bytes.
 
-Modes: 0 RAW; 1 byte-run RLE (count-minus-one, byte); 2 zlib DEFLATE; 3 byte delta then DEFLATE; 4 static byte-model rANS; 5 byte delta then static byte-model rANS.
+Modes: 0 RAW; 1 RLE pairs `(run_minus_one, byte)`; 2 zlib; 3 first-order byte delta + zlib; 4 static byte rANS; 5 first-order byte delta + rANS; 6 previous-byte-context XOR predictor + rANS; 7 stride-2 delta + rANS; 8 stride-4 delta + rANS.
 
-rANS uses a 12-bit normalized frequency table (256 little-endian u16 frequencies summing to 4096), a little-endian u32 state, then renormalization bytes. Every observed symbol receives at least one frequency unit. State lower bound is 2^23. Encoding is backwards; decoding consumes renormalization bytes forwards. The model is local to a block.
+Mode 6 stores a 256-byte predictor table before the rANS stream. Predictor for context `c` is the most frequent next byte observed after byte `c` in that block; ties choose the lowest byte value. Context for the first byte is zero. Residual is `input[i] XOR predictor[previous_byte]`.
 
-Encoder evaluates every mode and stores the shortest payload. Decoder validates lengths, model sum, stream exhaustion, block CRC and final file size. rANS model overhead is 516 bytes, so the encoder naturally avoids it for small/poorly compressible blocks.
+The encoder compares complete payload lengths for each block and selects the smallest candidate; RAW is always available. This is a research prototype, not yet a stable interoperable format. Decoder validates block bounds, total size, CRC and trailing bytes.
