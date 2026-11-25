@@ -1,10 +1,10 @@
-# STN11 container format (little-endian)
+# STN12 container format (little-endian)
 
 ## File header (21 bytes)
 
 | Field | Size | Meaning |
 |---|---:|---|
-| Magic | 5 | ASCII `STN11` |
+| Magic | 5 | ASCII `STN12` |
 | Version | 1 | `1` |
 | Flags | 3 | must be zero |
 | Original size | 8 | total uncompressed bytes |
@@ -14,7 +14,7 @@
 
 | Field | Size | Meaning |
 |---|---:|---|
-| Mode | 1 | 0 RAW, 1 raw-DEFLATE(block), 2 raw-DEFLATE(LZ77 tokens), 3 split streams + rANS |
+| Mode | 1 | 0 RAW, 1 raw-DEFLATE(block), 2 raw-DEFLATE(LZ77 tokens), 3 split streams + 4-lane interleaved rANS |
 | Flags | 1 | mode 1: bit0 = dictionary from previous block's decoded tail; mode 2: bit1 = dictionary from previous block's token stream; other bits invalid |
 | Raw size | 4 | decoded bytes in this block |
 | Payload size | 4 | stored bytes |
@@ -44,11 +44,14 @@ dictionary blocks are produced with zlib (`deflateSetDictionary` /
 The token stream is split into 8 per-class streams (stored in this order):
 0 tags, 1 literal bytes, 2 length codes, 3 length extra bits (raw),
 4 distance codes, 5 distance extra bits (raw), 6 rep varint bytes, 7 run-length varint bytes.
-Payload = 8 x u32 blob lengths, then blobs. A rANS blob = [u16 alphabet][u16 freqs][bytes];
-raw blobs are bit-packed MSB-first extra bits. Six streams are entropy-coded with a 32-bit
-rANS (12-bit probabilities, tables normalized to 4096); the encoder pushes symbols in
-reverse order, the decoder reads renormalization bytes backward and the final state from
-the last 4 bytes (big-endian). Length codes: v = length-4 < 64 direct, else bit-length
+Payload = 8 x u32 blob lengths, 5 x u32 symbol counts (lits, mlenc, mdistc, repv, runv;
+the tag count is the block's transformed field), then blobs. A rANS blob =
+[u16 alphabet][u16 freqs][u32 x4 lane lengths][lane blobs]; raw blobs are bit-packed
+MSB-first extra bits. Six streams are entropy-coded with a 32-bit rANS (12-bit
+probabilities, tables normalized to 4096), 4-lane interleaved: symbol k goes to lane k&3,
+each lane is an independent backward rANS ([renorm bytes][4-byte BE final state]); the
+decoder runs 4 state updates per iteration for ILP and assembles tokens from the decoded
+symbol arrays. Length codes: v = length-4 < 64 direct, else bit-length
 bucket (code 58 + bit-length, extra bits = low bits). Distance codes: e = distance-1 < 32
 direct, else code 26 + bit-length with extra bits. Transformed size = token count (each
 token consumes exactly one tag symbol). The per-block mode is chosen by the encoder;
@@ -58,7 +61,8 @@ mode 3 wins on blocks with high-entropy length/distance distributions.
 
 Per block the encoder tries RAW, raw-DEFLATE(block), raw-DEFLATE(block+dict), and if the
 sparse 3-gram repetition prefilter passes, raw-DEFLATE(tokens), raw-DEFLATE(tokens+dict) and
-split-stream rANS (mode 3, blocks >= 16 KiB); the shortest payload wins (ties in favor of the earlier candidate). The DEFLATE candidates
+split-stream rANS (mode 3, blocks >= 16 KiB; at level 9 + depth >= 2 additionally the
+DP-parse stream, min of the two is kept); the shortest payload wins (ties in favor of the earlier candidate). The DEFLATE candidates
 are computed in parallel over blocks; the token-dictionary candidate is validated against
 the previous block's actual winner. The file is rejected if block sizes do not sum to the
 declared original size or if trailing bytes remain.

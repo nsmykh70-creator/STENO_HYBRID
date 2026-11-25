@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -216,15 +217,21 @@ struct RansTab{
   used=q;
  }
 };
-static void rans_encode(const vector<uint8_t>&seq,uint32_t alpha,vector<uint8_t>&blob){
+// 4-lane interleaved rANS: symbol k of the stream goes to lane k&3; each lane is an
+// independent backward rANS whose blob is [renorm bytes][4-byte BE state]. Four lanes
+// give the decoder loop 4-way ILP on the state updates. Blob layout:
+// [u16 alphabet][u16 freqs][u32 x4 lane lengths][lane0][lane1][lane2][lane3].
+static void rans_encode_lanes(const vector<uint8_t>&seq,uint32_t alpha,vector<uint8_t>&blob){
  uint32_t hist[256]={0};for(uint8_t s:seq)hist[s]++;
  RansTab tab;tab.build(hist,uint32_t(seq.size()));
- RansEnc e;
- for(size_t i=seq.size();i-->0;)e.put(tab.cum[seq[i]],tab.freq[seq[i]]);
- e.flush();
+ RansEnc L[4];
+ for(size_t i=seq.size();i-->0;)L[i&3].put(tab.cum[seq[i]],tab.freq[seq[i]]);
+ uint32_t ll[4];
+ for(int j=0;j<4;j++){L[j].flush();ll[j]=uint32_t(L[j].out.size());}
  put16(blob,alpha);
  for(uint32_t i=0;i<alpha;i++)put16(blob,tab.freq[i]);
- blob.insert(blob.end(),e.out.begin(),e.out.end());
+ for(int j=0;j<4;j++)put32(blob,ll[j]);
+ for(int j=0;j<4;j++)blob.insert(blob.end(),L[j].out.begin(),L[j].out.end());
 }
 // ---- raw bit writer/reader for extra bits of length/distance codes ----
 struct BitW{
@@ -252,7 +259,8 @@ struct BitR{
 //   0 tags (4)      1 literals (256)   2 length codes (71)  3 length extra bits (raw)
 //   4 distance codes (49)  5 distance extra bits (raw)  6 rep varint bytes (256)
 //   7 run-length varint bytes (256)
-// Payload: 8 x u32 blob lengths, then blobs; a rANS blob = [u16 alphabet][u16 freqs][bytes].
+// Payload: 8 x u32 blob lengths, 5 x u32 symbol counts, then blobs; a rANS blob =
+// [u16 alphabet][u16 freqs][u32 x4 lane lengths][lane blobs] (4-lane interleaved).
 struct TokenStreams{vector<uint8_t> tags,lits,mlenc,mdistc,repv,runv;BitW mlenb_acc,mdistb_acc;vector<uint8_t> mlenb,mdistb;};
 static void put_mlen(TokenStreams&s,uint32_t len){
  uint32_t v=len-4;
@@ -282,61 +290,102 @@ static void split_tokens(const vector<uint8_t>&t,TokenStreams&s){
  s.mlenb_acc.finish();s.mdistb_acc.finish();
  s.mlenb=s.mlenb_acc.b;s.mdistb=s.mdistb_acc.b;
 }
+// Payload: 8 x u32 blob lengths, 5 x u32 symbol counts (lits, mlenc, mdistc, repv, runv;
+// the tag count is the block's transformed field), then blobs.
 static vector<uint8_t> rans_payload(const TokenStreams&s){
- vector<uint8_t> seq;vector<uint8_t> blobs[8];
- auto enc=[&](const vector<uint8_t>&x,uint32_t alpha,vector<uint8_t>&out){rans_encode(x,alpha,out);};
- enc(s.tags,4,blobs[0]);enc(s.lits,256,blobs[1]);enc(s.mlenc,71,blobs[2]);
- blobs[3]=s.mlenb;enc(s.mdistc,49,blobs[4]);blobs[5]=s.mdistb;
- enc(s.repv,256,blobs[6]);enc(s.runv,256,blobs[7]);
+ vector<uint8_t> blobs[8];
+ rans_encode_lanes(s.tags,4,blobs[0]);rans_encode_lanes(s.lits,256,blobs[1]);rans_encode_lanes(s.mlenc,71,blobs[2]);
+ blobs[3]=s.mlenb;rans_encode_lanes(s.mdistc,49,blobs[4]);blobs[5]=s.mdistb;
+ rans_encode_lanes(s.repv,256,blobs[6]);rans_encode_lanes(s.runv,256,blobs[7]);
  vector<uint8_t> o;
  for(int i=0;i<8;i++)put32(o,uint32_t(blobs[i].size()));
+ put32(o,uint32_t(s.lits.size()));put32(o,uint32_t(s.mlenc.size()));put32(o,uint32_t(s.mdistc.size()));
+ put32(o,uint32_t(s.repv.size()));put32(o,uint32_t(s.runv.size()));
  for(int i=0;i<8;i++)o.insert(o.end(),blobs[i].begin(),blobs[i].end());
  return o;
 }
-// mode 3 payload -> original block bytes; tokcount = number of tokens (tag count)
+// one stream: 4 lanes -> symbol array (decode order); 4-way unrolled for ILP
+static void rans_decode_lanes(const RansTab&T,const uint8_t*d,size_t len,uint32_t count,vector<uint8_t>&out){
+ out.clear();out.resize(count);
+ if(!count)return;
+ if(len<16)throw runtime_error("bad rans lanes");
+ uint32_t ll[4];
+ for(int j=0;j<4;j++)ll[j]=uint32_t(d[4*j])|(uint32_t(d[4*j+1])<<8)|(uint32_t(d[4*j+2])<<16)|(uint32_t(d[4*j+3])<<24);
+ size_t tot=0;for(int j=0;j<4;j++){if(ll[j]<4)throw runtime_error("bad rans lane");tot+=ll[j];}
+ if(tot!=len-16)throw runtime_error("bad rans lane lengths");
+ const uint8_t*lp[4];size_t o=16;
+ for(int j=0;j<4;j++){lp[j]=d+o;o+=ll[j];}
+ RansDec D[4]={{lp[0],ll[0]},{lp[1],ll[1]},{lp[2],ll[2]},{lp[3],ll[3]}};
+ auto step=[&](RansDec&Dd)->uint32_t{
+  uint32_t slot=Dd.x&RMASK;uint32_t s=T.lut[slot];
+  if(T.freq[s]==0)throw runtime_error("bad rans symbol");
+  Dd.x=T.freq[s]*(Dd.x>>12)+slot-T.cum[s];
+  return s;
+ };
+ auto ren=[&](RansDec&Dd){while(Dd.x<RL){if(Dd.p==0)throw runtime_error("rans renorm overrun");Dd.x=(Dd.x<<8)|Dd.b[--Dd.p];}};
+ size_t k=0;
+ for(;k+4<=count;k+=4){
+  uint32_t s0=step(D[0]),s1=step(D[1]),s2=step(D[2]),s3=step(D[3]);
+  ren(D[0]);ren(D[1]);ren(D[2]);ren(D[3]);
+  out[k]=uint8_t(s0);out[k+1]=uint8_t(s1);out[k+2]=uint8_t(s2);out[k+3]=uint8_t(s3);
+ }
+ for(;k<count;k++){RansDec&Dd=D[int(k&3)];out[k]=uint8_t(step(Dd));ren(Dd);}
+}
+// mode 3 payload -> original block bytes; tokcount = number of tokens (tag count).
+// Each stream is decoded to a symbol array first (fast 4-lane rANS), then the token
+// structure is assembled from the arrays; per-stream cursor checks double as integrity.
 static vector<uint8_t> rans_decode(const vector<uint8_t>&pl,uint32_t n,uint32_t tokcount){
  size_t p=0;uint32_t lens[8];size_t tot=0;
  for(int i=0;i<8;i++){lens[i]=get32(pl,p);tot+=lens[i];}
- if(tot!=pl.size()-32)throw runtime_error("bad mode3 stream lengths");
- const uint8_t*ptr[8];size_t off=32;
+ uint32_t cnt[5];
+ for(int i=0;i<5;i++)cnt[i]=get32(pl,p);
+ if(tot!=pl.size()-52)throw runtime_error("bad mode3 stream lengths");
+ for(int i=0;i<5;i++)if(cnt[i]>8ull*n+16)throw runtime_error("bad mode3 counts");
+ const uint8_t*ptr[8];size_t off=52;
  for(int i=0;i<8;i++){ptr[i]=pl.data()+off;off+=lens[i];}
  RansTab T[6];size_t used[6];
  static const int BID[6]={0,1,2,4,6,7}; // tables: tags,lits,mlenc,mdistc,repv,runv
  for(int i=0;i<6;i++)T[i].rebuild(ptr[BID[i]],lens[BID[i]],used[i]);
- RansDec dT(ptr[BID[0]]+used[0],lens[BID[0]]-used[0]),dL(ptr[BID[1]]+used[1],lens[BID[1]]-used[1]),
-         dM(ptr[BID[2]]+used[2],lens[BID[2]]-used[2]),dD(ptr[BID[3]]+used[3],lens[BID[3]]-used[3]),
-         dR(ptr[BID[4]]+used[4],lens[BID[4]]-used[4]),dN(ptr[BID[5]]+used[5],lens[BID[5]]-used[5]);
+ vector<uint8_t> atags,alits,aml,amd,arep,arun;
+ rans_decode_lanes(T[0],ptr[BID[0]]+used[0],lens[BID[0]]-used[0],tokcount,atags);
+ rans_decode_lanes(T[1],ptr[BID[1]]+used[1],lens[BID[1]]-used[1],cnt[0],alits);
+ rans_decode_lanes(T[2],ptr[BID[2]]+used[2],lens[BID[2]]-used[2],cnt[1],aml);
+ rans_decode_lanes(T[3],ptr[BID[3]]+used[3],lens[BID[3]]-used[3],cnt[2],amd);
+ rans_decode_lanes(T[4],ptr[BID[4]]+used[4],lens[BID[4]]-used[4],cnt[3],arep);
+ rans_decode_lanes(T[5],ptr[BID[5]]+used[5],lens[BID[5]]-used[5],cnt[4],arun);
  BitR bm(ptr[3],lens[3]),bd(ptr[5],lens[5]);
- auto rsym=[&](RansTab&T,RansDec&d)->uint32_t{
-  uint32_t slot=d.x&RMASK;uint32_t s=T.lut[slot];
-  if(T.freq[s]==0)throw runtime_error("bad rans symbol");
-  d.advance(T.cum[s],T.freq[s]);
-  return s;
- };
- auto rvar=[&](RansTab&T,RansDec&d)->uint32_t{
+ auto rvarA=[&](const vector<uint8_t>&arr,size_t&pos)->uint32_t{
   uint32_t v=0;int sh=0;
-  for(;;){uint32_t c=rsym(T,d);v|=uint32_t(c&127)<<sh;if(!(c&128))return v;sh+=7;if(sh>28)throw runtime_error("bad varint");}
+  for(;;){
+   if(pos>=arr.size())throw runtime_error("bad varint");
+   uint8_t c=arr[pos++];v|=uint32_t(c&127)<<sh;
+   if(!(c&128))return v;
+   sh+=7;if(sh>28)throw runtime_error("bad varint");
+  }
  };
  vector<uint8_t> o;o.reserve(n);uint32_t rep[4]={1,4,8,16};
+ size_t li=0,mi=0,di=0,pi=0,ni=0;
  for(uint32_t t=0;t<tokcount;t++){
-  uint32_t tag=rsym(T[0],dT);
-  if(tag==0){if(o.size()>=n)throw runtime_error("bad literal token");o.push_back(uint8_t(rsym(T[1],dL)));}
+  uint32_t tag=atags[t];
+  if(tag==0){if(o.size()>=n||li>=alits.size())throw runtime_error("bad literal token");o.push_back(alits[li++]);}
   else if(tag==2){
-   uint32_t rn=rvar(T[5],dN);
+   uint32_t rn=rvarA(arun,ni);
    if(rn<2||rn>n-o.size())throw runtime_error("bad literal run");
-   for(uint32_t k=0;k<rn;k++){if(o.size()>=n)throw runtime_error("bad literal run");o.push_back(uint8_t(rsym(T[1],dL)));}
+   if(li+rn>alits.size())throw runtime_error("bad literal run");
+   for(uint32_t k=0;k<rn;k++){if(o.size()>=n)throw runtime_error("bad literal run");o.push_back(alits[li++]);}
   }else if(tag==1){
-   uint32_t code=rsym(T[2],dM),len;
+   if(mi>=aml.size()||di>=amd.size())throw runtime_error("bad match token");
+   uint32_t code=aml[mi++],len;
    if(code<64)len=code+4;else{int bl=code-58;len=(1u<<(bl-1))+bm.get(int(bl-1))+4;}
    if(len>4096||len>n-o.size())throw runtime_error("invalid LZ match");
-   uint32_t dc=rsym(T[3],dD),d;
+   uint32_t dc=amd[di++],d;
    if(dc<32)d=dc+1;else{int bl=dc-26;d=(1u<<(bl-1))+bd.get(int(bl-1))+1;}
    if(d==0||d>o.size())throw runtime_error("invalid LZ distance");
    for(uint32_t k=0;k<len;k++)o.push_back(o[o.size()-d]);
    for(int k=3;k>0;k--)rep[k]=rep[k-1];
    rep[0]=d;
   }else if(tag==3){
-   uint32_t code=rvar(T[4],dR),len=code/4+4,idx=code%4;
+   uint32_t code=rvarA(arep,pi),len=code/4+4,idx=code%4;
    if(len>4096||len>n-o.size())throw runtime_error("invalid rep match");
    uint32_t d=rep[idx];
    if(d==0||d>o.size())throw runtime_error("invalid rep distance");
@@ -345,22 +394,114 @@ static vector<uint8_t> rans_decode(const vector<uint8_t>&pl,uint32_t n,uint32_t 
    rep[0]=d;
   }else throw runtime_error("unknown token");
  }
+ if(li!=alits.size()||mi!=aml.size()||di!=amd.size()||pi!=arep.size()||ni!=arun.size())throw runtime_error("mode3 stream counts mismatch");
  if(o.size()!=n)throw runtime_error("decoded size mismatch");
  return o;
 }
-// STN11: file header 21 bytes (magic "STN10", version 1, flags 3x zero, original size
+// ---- optimal parse (level 9 + depth >= 2, e.g. preset "max") ----
+// Forward DAG relaxation over the block; per-symbol costs come from the greedy pass
+// (rANS stream statistics). Edges: literal, full literal run, hash-chain matches
+// (depth candidates; best distance gets a full-length edge plus sub-length refinement),
+// rep-cache matches. The rep cache follows the best path (zstd-style single-state
+// approximation). Positions covered by a >=128-byte match skip candidate scans, which
+// keeps periodic data cheap. The result replaces the greedy stream for the mode 3
+// candidate only; mode 2 candidates keep the greedy stream.
+struct DpChoice{uint8_t kind;uint32_t a,b;}; // 0 lit, 1 match(len,dist), 2 run(n), 3 rep(idx,len)
+static void build_tabs(const vector<uint8_t>&tok,RansTab tabs[6]){
+ TokenStreams s;split_tokens(tok,s);
+ const vector<uint8_t>*seqs[6]={&s.tags,&s.lits,&s.mlenc,&s.mdistc,&s.repv,&s.runv};
+ for(int i=0;i<6;i++){uint32_t hist[256]={0};for(uint8_t b:*seqs[i])hist[b]++;tabs[i].build(hist,uint32_t(seqs[i]->size()));}
+}
+static vector<uint8_t> dp_tokenize(const vector<uint8_t>&a,size_t window,int depth,const RansTab*tabs){
+ size_t n=a.size();
+ auto cost=[&](const RansTab&t,uint32_t sym)->double{uint32_t f=t.freq[sym&255];return f?-log2(double(f)/double(RSCALE)):12.0;};
+ auto vcost=[&](const RansTab&t,uint32_t v)->double{double c=0;while(v>=128){c+=cost(t,uint8_t((v&127)|128));v>>=7;}return c+cost(t,uint8_t(v));};
+ auto cost_len=[&](uint32_t L)->double{uint32_t v=L-4;if(v<64)return cost(tabs[2],v);int bl=32-__builtin_clz(v);return cost(tabs[2],58+bl)+double(bl-1);};
+ auto cost_dist=[&](uint32_t d)->double{uint32_t e=d-1;if(e<32)return cost(tabs[3],e);int bl=32-__builtin_clz(e);return cost(tabs[3],26+bl)+double(bl-1);};
+ auto shiftp=[&](const array<uint32_t,4>&r,uint32_t d,int idx){array<uint32_t,4> o=r;for(int k=idx;k>0;k--)o[k]=o[k-1];o[0]=d;return o;};
+ const double INF=1e30;
+ vector<double> C(n+1,INF);vector<DpChoice> CH(n+1);vector<array<uint32_t,4>> RS(n+1);
+ vector<uint8_t> cover(n,0);
+ C[0]=0;RS[0]={1,4,8,16};
+ vector<int32_t> head(65536,-1),prev(n,-1);
+ auto insert=[&](size_t k){uint32_t h=hash3(a,k);prev[k]=head[h];head[h]=int32_t(k);};
+ for(size_t i=0;i<n;i++){
+  double ci=C[i];const array<uint32_t,4> rp=RS[i];
+  {double c=ci+cost(tabs[0],0)+cost(tabs[1],a[i]);if(c<C[i+1]){C[i+1]=c;CH[i+1]={0,a[i],0};RS[i+1]=rp;}}
+  if(!cover[i]){
+   if(i+1<n&&a[i+1]==a[i]){
+    size_t r=2;while(i+r<n&&r<65536&&a[i+r]==a[i])r++;
+    double c=ci+cost(tabs[0],2)+vcost(tabs[5],uint32_t(r))+double(r)*cost(tabs[1],a[i]);
+    if(c<C[i+r]){C[i+r]=c;CH[i+r]={2,uint32_t(r),0};RS[i+r]=rp;}
+   }
+   if(i+3<n){
+    uint32_t h=hash3(a,i);int32_t q=head[h];
+    size_t bl=0,bd=0;double be=INF;
+    for(int s=0;s<depth&&q>=0&&i-size_t(q)<=window;s++){
+     size_t d=i-size_t(q),maxl=min<size_t>(256,n-i),l=0;
+     while(l<maxl&&a[size_t(q)+l]==a[i+l])l++;
+     if(l>=4){
+      double e=cost(tabs[0],1)+cost_len(uint32_t(l))+cost_dist(uint32_t(d));
+      if(ci+e<C[i+l]){C[i+l]=ci+e;CH[i+l]={1,uint32_t(l),uint32_t(d)};RS[i+l]=shiftp(rp,uint32_t(d),3);}
+      if(e<be){be=e;bd=d;bl=l;}
+     }
+     q=prev[q];
+    }
+    if(bl){
+     size_t full=min<size_t>(4096,n-i);size_t l=0;
+     while(l<full&&a[i-bd+l]==a[i+l])l++;
+     if(l>=4){
+      double e=cost(tabs[0],1)+cost_len(uint32_t(l))+cost_dist(uint32_t(bd));
+      if(ci+e<C[i+l]){C[i+l]=ci+e;CH[i+l]={1,uint32_t(l),uint32_t(bd)};RS[i+l]=shiftp(rp,uint32_t(bd),3);}
+      double e0=cost(tabs[0],1)+cost_dist(uint32_t(bd));
+      for(size_t L=4;L<min(l,size_t(129));L++){
+       double c2=ci+e0+cost_len(uint32_t(L));
+       if(c2<C[i+L]){C[i+L]=c2;CH[i+L]={1,uint32_t(L),uint32_t(bd)};RS[i+L]=shiftp(rp,uint32_t(bd),3);}
+      }
+      if(l>=128)for(size_t k=1;k<l;k++)cover[i+k]=1;
+     }
+    }
+    for(int idx=0;idx<4;idx++){
+     uint32_t d=rp[idx];if(d==0||d>i)continue;
+     size_t maxl=min<size_t>(256,n-i),l=0;
+     while(l<maxl&&a[i-d+l]==a[i+l])l++;
+     if(l>=4){
+      double e=cost(tabs[0],3)+vcost(tabs[4],(uint32_t(l)-4)*4+uint32_t(idx));
+      if(ci+e<C[i+l]){C[i+l]=ci+e;CH[i+l]={3,uint32_t(l),uint32_t(idx)};RS[i+l]=shiftp(rp,d,idx);}
+     }
+    }
+   }
+  }
+  if(i+3<=n)insert(i);
+ }
+ vector<DpChoice> path;
+ {size_t i=n;while(i>0){DpChoice c=CH[i];path.push_back(c);i-=(c.kind==0?1:c.a);}}
+ vector<uint8_t> t;t.reserve(n);
+ size_t pos=0;uint32_t rep[4]={1,4,8,16};
+ for(size_t k=path.size();k-->0;){
+  DpChoice c=path[k];
+  if(c.kind==0){t.push_back(0);t.push_back(uint8_t(c.a));pos++;}
+  else if(c.kind==2){t.push_back(2);varint(t,c.a);t.insert(t.end(),a.begin()+pos,a.begin()+pos+c.a);pos+=c.a;}
+  else if(c.kind==1){if(c.b==0||c.b>pos||pos+c.a>n)throw runtime_error("dp internal error");t.push_back(1);varint(t,c.a);varint(t,c.b);for(int q=3;q>0;q--)rep[q]=rep[q-1];rep[0]=c.b;pos+=c.a;}
+  else{if(c.b>3||pos+c.a>n)throw runtime_error("dp internal error");uint32_t d=rep[c.b];if(d==0||d>pos)throw runtime_error("dp internal error");t.push_back(3);varint(t,(c.a-4)*4+c.b);for(int q=int(c.b);q>0;q--)rep[q]=rep[q-1];rep[0]=d;pos+=c.a;}
+ }
+ if(pos!=n)throw runtime_error("dp internal error");
+ return t;
+}
+// STN12: file header 21 bytes (magic "STN12", version 1, flags 3x zero, original size
 // u64, block count u32); each block: mode u8, flags u8, raw u32, payload u32,
 // transformed u32, CRC32 u32. Modes: 0 RAW, 1 raw-DEFLATE(block), 2 raw-DEFLATE(LZ77
-// tokens), 3 split token streams + rANS order-0. Flags: mode 1 bit0 = dictionary from
-// previous block's decoded tail (<=32 KiB); mode 2 bit1 = dictionary from previous
-// block's token stream (valid only when the previous block's winner was mode 2, so the
-// decoder has the stream); mode 3 has no flags.
-// Encode pipeline: phase 1 tokenizes candidate blocks, phase 2 runs the DEFLATE and
-// rANS candidates in parallel over blocks (raw-tail dictionary depends only on the
-// input; the optimistic token-stream dictionary candidate is validated in the serial
-// phase 3 against the previous block's actual winner). Output is identical for any
-// thread count. force_mode (1..3, 0 = off) picks its candidate unconditionally when
-// feasible, for tests.
+// tokens), 3 split token streams + 4-lane interleaved rANS order-0. Flags: mode 1 bit0 =
+// dictionary from previous block's decoded tail (<=32 KiB); mode 2 bit1 = dictionary from
+// previous block's token stream (valid only when the previous block's winner was mode 2,
+// so the decoder has the stream); mode 3 has no flags.
+// Encode pipeline: phase 1 tokenizes candidate blocks; phase 2 runs the DEFLATE and rANS
+// candidates in parallel over blocks (at level 9 + depth >= 2 the mode 3 candidate uses a
+// cost-model DP parse; mode 2 candidates keep the greedy stream; raw-tail dictionary
+// depends only on the input; the optimistic token-stream dictionary candidate is
+// validated in the serial phase 3 against the previous block's actual winner). Output is
+// identical for any thread count. force_mode (1..3, 0 = off) picks its candidate
+// unconditionally when feasible, for tests.
 static vector<uint8_t> encode(const vector<uint8_t>&in,int level,size_t bs,size_t window,int depth,int threads,int force_mode){
  if(level<1||level>9||bs<4096||bs>4*1024*1024||window<4096||window>4*1024*1024||depth<1||depth>1024)throw runtime_error("invalid level/block/window/depth size");
  if(force_mode<0||force_mode>3)throw runtime_error("invalid force_mode");
@@ -368,7 +509,8 @@ static vector<uint8_t> encode(const vector<uint8_t>&in,int level,size_t bs,size_
  if(threads<1)threads=1;
  if(threads>64)threads=64;
  size_t nb=(in.size()+bs-1)/bs;
- vector<uint8_t> o={'S','T','N','1','1',1,0,0,0};put64(o,in.size());put32(o,uint32_t(nb));
+ const bool dp_on=(level==9&&depth>=2);
+ vector<uint8_t> o={'S','T','N','1','2',1,0,0,0};put64(o,in.size());put32(o,uint32_t(nb));
  vector<vector<uint8_t>> tok(nb);
  auto phase=[&](auto&&fn){
   if(threads==1||nb==1){for(size_t b=0;b<nb;b++)fn(b);return;}
@@ -393,10 +535,22 @@ static vector<uint8_t> encode(const vector<uint8_t>&in,int level,size_t bs,size_
     vector<uint8_t> dict(tok[b-1].end()-dn,tok[b-1].end());
     ztdv[b]=deflate_raw(tok[b],level,dict);
    }
-   // rANS candidate: worth trying on sizable blocks (fixed table overhead)
+   // rANS candidate: worth trying on sizable blocks (fixed table overhead);
+   // at max also a DP-parse stream — keep whichever payload is smaller
    if(n>=16384||force_mode==3){
-    TokenStreams s;split_tokens(tok[b],s);
-    zrv[b]=rans_payload(s);tc[b]=uint32_t(s.tags.size());
+    vector<uint8_t> src;
+    if(dp_on){
+     RansTab tabs[6];build_tabs(tok[b],tabs);
+     src=dp_tokenize(a,window,depth,tabs);
+     TokenStreams sd;split_tokens(src,sd);
+     zrv[b]=rans_payload(sd);tc[b]=uint32_t(sd.tags.size());
+     TokenStreams sg;split_tokens(tok[b],sg);
+     vector<uint8_t> rg=rans_payload(sg);
+     if(rg.size()<zrv[b].size()){zrv[b]=move(rg);tc[b]=uint32_t(sg.tags.size());}
+    }else{
+     TokenStreams s;split_tokens(tok[b],s);
+     zrv[b]=rans_payload(s);tc[b]=uint32_t(s.tags.size());
+    }
    }
   }
   z1v[b]=move(z1);
@@ -422,7 +576,7 @@ static vector<uint8_t> encode(const vector<uint8_t>&in,int level,size_t bs,size_
  return o;
 }
 static vector<uint8_t> decode(const vector<uint8_t>&x){
- if(x.size()<21||memcmp(x.data(),"STN11",5))throw runtime_error("bad STN11 header");
+ if(x.size()<21||memcmp(x.data(),"STN12",5))throw runtime_error("bad STN12 header");
  size_t p=5;
  if(x[p++]!=1||x[p++]||x[p++]||x[p++])throw runtime_error("unsupported flags");
  uint64_t total=get64(x,p);uint32_t blocks=get32(x,p);
@@ -465,7 +619,7 @@ static vector<uint8_t> decode(const vector<uint8_t>&x){
  return out;
 }
 int main(int argc,char**argv){try{
- if(argc<4){cerr<<"usage: steno11 encode|decode input output [level=6|fast|default|max] [block=1048576] [window=262144] [depth=1] [threads=0=auto] [force_mode=0]\n";return 2;}
+ if(argc<4){cerr<<"usage: steno12 encode|decode input output [level=6|fast|default|max] [block=1048576] [window=262144] [depth=1] [threads=0=auto] [force_mode=0]\n";return 2;}
  ifstream f(argv[2],ios::binary);if(!f)throw runtime_error("input open failed");
  vector<uint8_t>in((istreambuf_iterator<char>(f)),{});
  auto t=chrono::steady_clock::now();

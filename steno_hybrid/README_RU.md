@@ -1,6 +1,20 @@
-# STENO HYBRID v11
+# STENO HYBRID v12
 
-Экспериментальный блочный lossless-кодек C++17. Формат STN11 (несовместим с STN9/STN10).
+Экспериментальный блочный lossless-кодек C++17. Формат STN12 (несовместим с STN9/STN10/STN11).
+
+## Что нового по сравнению с v11
+
+- Mode 3 переведён на 4-линейный interleaved rANS: символ k потока идёт в линию k&3,
+  каждая линия — независимый rANS; декодер разворачивает 4 независимых обновления
+  состояния (ILP ×4) и собирает токены из массивов символов. Потоки симолов получают
+  счётчики в payload (проверка курсоров = целостность).
+- Оптимальный парсер с ценовой моделью для пресета max (уровень 9 + depth ≥ 2):
+  forward-DAG релаксация по блоку (литерал / серия / хеш-цепочки с суб-длинами /
+  rep-кандидаты), цены символов из статистики greedy-прохода, rep-кеш следует за лучшим
+  путём. На walk-данных mode 3 от DP бьёт greedy на ~11%: walk_fine **14.34%** (v11: 16.25%,
+  v10: 19.61%). Для страховки энкодер на max берёт минимум из DP- и greedy-кандидатов.
+- Декод mode 3 в зависимости от структуры матчей 150-750 МиБ/с (длинные матчи копируются
+  быстро, короткие упираются в побайтовое копирование).
 
 ## Что нового по сравнению с v10
 
@@ -35,21 +49,21 @@
 Требуются g++/clang++ с C++17 и zlib:
 
 ```bash
-g++ -O3 -DNDEBUG -std=c++17 -Wall -Wextra -pedantic native.cpp -lz -o steno11
+g++ -O3 -DNDEBUG -std=c++17 -Wall -Wextra -pedantic native.cpp -lz -o steno12
 # опционально, с libdeflate (быстрее; словарные блоки всё равно идут через zlib):
-g++ -O3 -DNDEBUG -DHAVE_LIBDEFLATE -std=c++17 -Wall -Wextra -pedantic native.cpp -ldeflate -lz -o steno11
+g++ -O3 -DNDEBUG -DHAVE_LIBDEFLATE -std=c++17 -Wall -Wextra -pedantic native.cpp -ldeflate -lz -o steno12
 ```
 
 ## Использование
 
 ```bash
-./steno11 encode input.bin output.stn [level=6|fast|default|max] [block=1048576] [window=262144] [depth=1] [threads=0]
-./steno11 decode output.stn restored.bin
+./steno12 encode input.bin output.stn [level=6|fast|default|max] [block=1048576] [window=262144] [depth=1] [threads=0]
+./steno12 decode output.stn restored.bin
 ```
 
 Уровень zlib: 1–9 или пресет fast/default/max. Размер блока: 4 КиБ–4 МиБ. Окно: 4 КиБ–4 МиБ.
 depth: 1–1024 (глубина цепочки кандидатов). threads: 0 = авто. Декодер определяет формат
-по сигнатуре STN11.
+по сигнатуре STN12.
 
 ## Важные ограничения
 
@@ -58,4 +72,4 @@ depth: 1–1024 (глубина цепочки кандидатов). threads: 0
 - Обработка файла целиком в памяти; потоковый ввод/вывод и mmap — волне 3.
 - Парсер жадный с ленивым сопоставлением; это не match finder уровня zstd/LZMA.
 - Результаты на синтетических корпусах по 1 МиБ не доказывают преимущество на произвольных файлах.
-- Форматы версионируются магией: STN11 не читается декодерами v8/v9/v10.
+- Форматы версионируются магией: STN12 не читается декодерами v8/v9/v10/v11.

@@ -1,5 +1,5 @@
 import os, random, subprocess, tempfile, pathlib, struct, zlib
-EXE=pathlib.Path(os.environ.get('STENO_EXE') or pathlib.Path(__file__).resolve().parents[1]/'steno11')
+EXE=pathlib.Path(os.environ.get('STENO_EXE') or pathlib.Path(__file__).resolve().parents[1]/'steno12')
 r=random.Random(88421)
 text='Русский текст и English text 中文 日本語 ไทย — UTF-8 проверка. '*3000
 jsondata=''.join('{"users":[{"id":%d,"name":"user_%d","active":true}]}\n'%(i,i) for i in range(1000))
@@ -21,11 +21,11 @@ def run(mode,src,dst,extra=()):
  if p.returncode: raise RuntimeError(p.stderr.decode())
 def rawdef(b):
  c=zlib.compressobj(6,zlib.DEFLATED,-15);return c.compress(b)+c.flush()
-def mk_hdr(total,blocks): return b'STN11'+bytes([1,0,0,0])+struct.pack('<Q',total)+struct.pack('<I',blocks)
+def mk_hdr(total,blocks): return b'STN12'+bytes([1,0,0,0])+struct.pack('<Q',total)+struct.pack('<I',blocks)
 def mk_block(mode,flags,n,payload,tf=0): return bytes([mode,flags])+struct.pack('<IIII',n,len(payload),tf,zlib.crc32(b'ABCD'))+payload
 def block_modes(arc):
  b=arc.read_bytes()
- assert b[:5]==b'STN11'
+ assert b[:5]==b'STN12'
  nb=struct.unpack('<I',b[17:21])[0]
  p=21;ms=[]
  for _ in range(nb):
@@ -82,7 +82,8 @@ with tempfile.TemporaryDirectory() as td:
  good=arc.read_bytes()
  bad_cases={
   'bad_magic': b'bad',
-  'stn10_magic': b'STN10'+good[5:],
+  'stn11_magic': b'STN11'+good[5:],
+ 'stn10_magic': b'STN10'+good[5:],
   'trailing': good+b'\x00',
   'crc_flip': good[:-5]+bytes([good[-5]^0xFF])+good[-4:],
   'blocks_lie': good[:17]+struct.pack('<I',1<<30)+good[21:],
@@ -102,3 +103,25 @@ with tempfile.TemporaryDirectory() as td:
   except RuntimeError: pass
   else: raise AssertionError(f'{name}: corrupt archive accepted')
  print('corruption tests: PASS')
+
+# ---- v12: DP-парсер (max) на всех корпусах с токенами + детерминизм ----
+import tempfile as _tf
+with _tf.TemporaryDirectory() as td2:
+ p2=pathlib.Path(td2);src=p2/'in';arc=p2/'a';out=p2/'out'
+ for name in TOK_CASES:
+    data=CASES[name];src.write_bytes(data)
+    run('encode',src,arc,['max','1048576','262144'])
+    run('decode',arc,out)
+    assert out.read_bytes()==data,('max',name)
+    a1=arc.read_bytes()
+    run('encode',src,arc,['max','1048576','262144'])
+    assert arc.read_bytes()==a1,('max determinism',name)
+ print(f'DP (preset max) round-trips + determinism: PASS ({len(TOK_CASES)} corpora)')
+ # DP на маленьком блоке (границы 4 КиБ) и грубой сетке
+ mixed=CASES['multilingual'][:60000]+CASES['json'][:40000]+CASES['period45k'][:20000]
+ src.write_bytes(mixed)
+ for lvl,bs,win in [(9,4096,4096),(9,65536,65536),(9,1048576,262144),(9,4096,1048576)]:
+    run('encode',src,arc,[str(lvl),str(bs),str(win),'16'])
+    run('decode',arc,out)
+    assert out.read_bytes()==mixed,(lvl,bs,win)
+ print('DP parameter grid: PASS')
