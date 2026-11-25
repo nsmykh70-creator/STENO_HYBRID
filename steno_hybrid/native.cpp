@@ -81,13 +81,19 @@ static bool likely_repetitive(const vector<uint8_t>&a){
  for(size_t i=0;i+2<a.size();i+=8){uint32_t h=((uint32_t(a[i])*251u+uint32_t(a[i+1]))*251u+uint32_t(a[i+2]))&((1u<<22)-1);samples++;if(seen[h])repeats++;else seen[h]=1;}
  return samples && repeats*100>=samples*7;
 }
-// Greedy LZ77 with lazy matching: 3-byte hash, hash-chain search over up to `depth`
-// most recent candidates within the window (depth=1 reproduces the v9 single-candidate
-// parser byte for byte), match lengths 4..4096.
-// Tokens: literal = 0, byte; match = 1, varint(length), varint(distance); literal run = 2, varint(n>=2), n bytes.
+// Greedy LZ77 with lazy matching, hash chains (depth most-recent candidates) and a
+// 4-entry rep-distance cache. The rep cache is per block and initialized to {1,4,8,16}
+// on both encoder and decoder. Tokens:
+//   literal     = 0, byte
+//   match       = 1, varint(length 4..4096), varint(distance)
+//   literal run = 2, varint(n>=2), n bytes
+//   rep match   = 3, varint(code), code = (length-4)*4 + rep_index, distance = rep cache
+// A hash match pushes its distance into the cache; a rep match moves the used entry
+// to the front. Encoder and decoder maintain the cache identically.
 static vector<uint8_t> tokenize(const vector<uint8_t>&a,size_t window,int depth){
  vector<uint8_t> t;t.reserve(a.size());
  vector<int32_t> head(65536,-1),prev(a.size(),-1);
+ uint32_t rep[4]={1,4,8,16};
  auto insert=[&](size_t k){uint32_t h=hash3(a,k);prev[k]=head[h];head[h]=int32_t(k);};
  auto find_best=[&](size_t j,size_t&bdist){
   if(j+3>a.size())return size_t(0);
@@ -100,6 +106,20 @@ static vector<uint8_t> tokenize(const vector<uint8_t>&a,size_t window,int depth)
   }
   return bl;
  };
+ // rep candidate: longest match at a cached distance, lowest cache index wins ties
+ auto find_rep=[&](size_t j,size_t&bidx){
+  bidx=4;
+  if(j+4>a.size())return size_t(0);
+  size_t bl=0;
+  for(int idx=0;idx<4;idx++){
+   size_t d=rep[idx];if(d>j)continue;
+   size_t maxl=min<size_t>(4096,a.size()-j),l=0;
+   while(l<maxl&&a[j-d+l]==a[j+l])l++;
+   if(l>=4&&(l>bl||bidx==4||(l==bl&&bidx>(size_t)idx))){bl=l;bidx=(size_t)idx;}
+  }
+  return bl;
+ };
+ auto shift_rep=[&](size_t d,int idx){for(int k=idx;k>0;k--)rep[k]=rep[k-1];rep[0]=uint32_t(d);};
  size_t i=0,lit=0;
  auto flush=[&](size_t end){
   while(lit<end){size_t run=end-lit;
@@ -108,45 +128,59 @@ static vector<uint8_t> tokenize(const vector<uint8_t>&a,size_t window,int depth)
   }
  };
  while(i<a.size()){
-  size_t best=0,dist=0;
-  if(i+3<=a.size()){best=find_best(i,dist);insert(i);}
+  size_t hlen=0,hdist=0,ridx=4,rlen=0;
+  if(i+3<=a.size()){hlen=find_best(i,hdist);insert(i);}
+  rlen=find_rep(i,ridx);
+  size_t best=max(hlen,rlen);
   if(best>=4){
-   // Lazy check: if a match at i+1 is longer, emit a[i] as literal and move on.
-   size_t best2=0,d2=0;
-   if(i+1+3<=a.size())best2=find_best(i+1,d2);
+   // Lazy check: if the full candidate set at i+1 is longer, emit a[i] as literal.
+   size_t hlen2=0,hd2=0,r2=4,rl2=0;
+   if(i+1+3<=a.size())hlen2=find_best(i+1,hd2);
+   rl2=find_rep(i+1,r2);
+   size_t best2=max(hlen2,rl2);
    if(best2>best){flush(i+1);i++;lit=i;}
-   else{flush(i);t.push_back(1);varint(t,uint32_t(best));varint(t,uint32_t(dist));size_t end=i+best;for(size_t k=i+1;k+2<end;k++)insert(k);i=end;lit=i;}
+   else if(rlen>=hlen){
+    size_t d=rep[ridx];flush(i);t.push_back(3);varint(t,uint32_t((best-4)*4+ridx));shift_rep(d,int(ridx));
+    size_t end=i+best;for(size_t k=i+1;k+2<end;k++)insert(k);i=end;lit=i;
+   }else{
+    flush(i);t.push_back(1);varint(t,uint32_t(best));varint(t,uint32_t(hdist));shift_rep(hdist,3);
+    size_t end=i+best;for(size_t k=i+1;k+2<end;k++)insert(k);i=end;lit=i;
+   }
   }else i++;
  }
  flush(a.size());
  return t;
 }
 static vector<uint8_t> detokenize(const vector<uint8_t>&t,size_t expected){
- vector<uint8_t> o;o.reserve(expected);size_t p=0;
+ vector<uint8_t> o;o.reserve(expected);size_t p=0;uint32_t rep[4]={1,4,8,16};
  while(p<t.size()){
   uint8_t tag=t[p++];
   if(tag==0){if(p>=t.size()||o.size()>=expected)throw runtime_error("bad literal token");o.push_back(t[p++]);}
   else if(tag==2){uint32_t n=readvar(t,p);if(n<2||n>expected-o.size()||p+n>t.size())throw runtime_error("bad literal run");o.insert(o.end(),t.begin()+p,t.begin()+p+n);p+=n;}
-  else if(tag==1){uint32_t n=readvar(t,p),d=readvar(t,p);if(n<4||n>4096||d==0||d>o.size()||n>expected-o.size())throw runtime_error("invalid LZ match");for(uint32_t k=0;k<n;k++)o.push_back(o[o.size()-d]);}
+  else if(tag==1){uint32_t n=readvar(t,p),d=readvar(t,p);if(n<4||n>4096||d==0||d>o.size()||n>expected-o.size())throw runtime_error("invalid LZ match");for(uint32_t k=0;k<n;k++)o.push_back(o[o.size()-d]);for(int k=3;k>0;k--)rep[k]=rep[k-1];rep[0]=d;}
+  else if(tag==3){uint32_t code=readvar(t,p);uint32_t n=code/4+4,idx=code%4;if(n>4096||n>expected-o.size())throw runtime_error("invalid rep match");uint32_t d=rep[idx];if(d==0||d>o.size())throw runtime_error("invalid rep distance");for(uint32_t k=0;k<n;k++)o.push_back(o[o.size()-d]);for(int k=int(idx);k>0;k--)rep[k]=rep[k-1];rep[0]=d;}
   else throw runtime_error("unknown token");
  }
  if(o.size()!=expected)throw runtime_error("decoded size mismatch");
  return o;
 }
-// STN9: file header 20 bytes; each block: mode u8, flags u8 (bit0 = DEFLATE preset
-// dictionary from previous block tail), raw u32, payload u32, transformed u32, CRC32 u32.
-// Modes: 0 RAW, 1 raw-DEFLATE(block), 2 raw-DEFLATE(LZ77 tokens).
+// STN10: file header 21 bytes (magic "STN10", version 1, flags 3x zero, original size
+// u64, block count u32); each block: mode u8, flags u8, raw u32, payload u32,
+// transformed u32, CRC32 u32. Modes: 0 RAW, 1 raw-DEFLATE(block), 2 raw-DEFLATE(LZ77
+// tokens). Flags: mode 1 bit0 = dictionary from previous block's decoded tail (<=32 KiB);
+// mode 2 bit1 = dictionary from previous block's token stream (valid only when the
+// previous block's winner was mode 2, so the decoder has the stream).
 // Encode pipeline: phase 1 tokenizes candidate blocks, phase 2 runs the DEFLATE
-// candidates, both parallel over blocks (each candidate depends only on the input,
-// since the raw dictionary is just the previous block's own bytes); phase 3 emits
-// blocks in order. Output is identical for any thread count.
+// candidates in parallel over blocks (raw-tail dictionary depends only on the input;
+// the optimistic token-stream dictionary candidate is validated in the serial phase 3
+// against the previous block's actual winner). Output is identical for any thread count.
 static vector<uint8_t> encode(const vector<uint8_t>&in,int level,size_t bs,size_t window,int depth,int threads){
  if(level<1||level>9||bs<4096||bs>4*1024*1024||window<4096||window>4*1024*1024||depth<1||depth>1024)throw runtime_error("invalid level/block/window/depth size");
  if(threads<=0)threads=int(thread::hardware_concurrency());
  if(threads<1)threads=1;
  if(threads>64)threads=64;
  size_t nb=(in.size()+bs-1)/bs;
- vector<uint8_t> o={'S','T','N','9',1,0,0,0};put64(o,in.size());put32(o,uint32_t(nb));
+ vector<uint8_t> o={'S','T','N','1','0',1,0,0,0};put64(o,in.size());put32(o,uint32_t(nb));
  vector<vector<uint8_t>> tok(nb);
  auto phase=[&](auto&&fn){
   if(threads==1||nb==1){for(size_t b=0;b<nb;b++)fn(b);return;}
@@ -155,57 +189,77 @@ static vector<uint8_t> encode(const vector<uint8_t>&in,int level,size_t bs,size_
   for(auto&x:ts)x.join();
  };
  phase([&](size_t b){size_t off=b*bs,n=min(bs,in.size()-off);vector<uint8_t> a(in.begin()+off,in.begin()+off+n);if(likely_repetitive(a))tok[b]=tokenize(a,window,depth);});
- vector<vector<uint8_t>> pay(nb);vector<uint8_t> mode(nb,0),flags(nb,0);vector<uint32_t> tr(nb,0),sum(nb,0),rn(nb,0);
+ vector<vector<uint8_t>> z1v(nb),zdv(nb),ztv(nb),ztdv(nb);vector<uint32_t> sum(nb,0),rn(nb,0);
  phase([&](size_t b){
   size_t off=b*bs,n=min(bs,in.size()-off);vector<uint8_t> a(in.begin()+off,in.begin()+off+n);
-  vector<uint8_t> best=a;uint8_t m=0,fl=0;uint32_t tf=0;
-  auto z1=deflate_raw(a,level,{});
-  size_t z1s=z1.size();
-  if(z1s<best.size()){best=move(z1);m=1;}
-  // Dict pass only makes sense when plain DEFLATE actually compressed the block;
-  // on incompressible data it would double the encode time for nothing.
-  if(b>0&&z1s<n){
+  auto z1=deflate_raw(a,level,{});rn[b]=uint32_t(n);sum[b]=crc(a.data(),a.size());
+  if(z1.size()<n&&b>0){
    size_t po=(b-1)*bs,pn=min(bs,in.size()-po),dn=min<size_t>(pn,32768);
    vector<uint8_t> dict(in.begin()+po+pn-dn,in.begin()+po+pn);
-   auto zd=deflate_raw(a,level,dict);if(zd.size()<best.size()){best=move(zd);m=1;fl=1;}
+   zdv[b]=deflate_raw(a,level,dict);
   }
-  if(!tok[b].empty()){auto zt=deflate_raw(tok[b],level,{});if(zt.size()<best.size()){best=move(zt);m=2;fl=0;tf=uint32_t(tok[b].size());}}
-  pay[b]=move(best);mode[b]=m;flags[b]=fl;tr[b]=tf;sum[b]=crc(a.data(),a.size());rn[b]=uint32_t(n);
+  if(!tok[b].empty()){
+   ztv[b]=deflate_raw(tok[b],level,{});
+   if(b>0&&!tok[b-1].empty()){
+    size_t tn=tok[b-1].size(),dn=min<size_t>(tn,32768);
+    vector<uint8_t> dict(tok[b-1].end()-dn,tok[b-1].end());
+    ztdv[b]=deflate_raw(tok[b],level,dict);
+   }
+  }
+  z1v[b]=move(z1);
  });
+ vector<uint8_t> winm(nb,0);
  for(size_t b=0;b<nb;b++){
-  o.push_back(mode[b]);o.push_back(flags[b]);put32(o,rn[b]);put32(o,uint32_t(pay[b].size()));put32(o,tr[b]);put32(o,sum[b]);
-  o.insert(o.end(),pay[b].begin(),pay[b].end());
+  size_t off=b*bs,n=rn[b];
+  vector<uint8_t> best(in.begin()+off,in.begin()+off+n);uint8_t m=0,fl=0;uint32_t tf=0;
+  if(!z1v[b].empty()&&z1v[b].size()<best.size()){best=z1v[b];m=1;}
+  if(!zdv[b].empty()&&zdv[b].size()<best.size()){best=zdv[b];m=1;fl=1;}
+  if(!ztv[b].empty()&&ztv[b].size()<best.size()){best=ztv[b];m=2;fl=0;tf=uint32_t(tok[b].size());}
+  // token-stream dictionary candidate is only valid when the previous block's winner
+  // was mode 2, otherwise the decoder has no previous token stream to use as dictionary
+  if(b>0&&!ztdv[b].empty()&&winm[b-1]==2&&ztdv[b].size()<best.size()){best=ztdv[b];m=2;fl=2;tf=uint32_t(tok[b].size());}
+  winm[b]=m;
+  o.push_back(m);o.push_back(fl);put32(o,rn[b]);put32(o,uint32_t(best.size()));put32(o,tf);put32(o,sum[b]);
+  o.insert(o.end(),best.begin(),best.end());
  }
  return o;
 }
 static vector<uint8_t> decode(const vector<uint8_t>&x){
- if(x.size()<20||memcmp(x.data(),"STN9",4))throw runtime_error("bad STN9 header");
- size_t p=4;
+ if(x.size()<21||memcmp(x.data(),"STN10",5))throw runtime_error("bad STN10 header");
+ size_t p=5;
  if(x[p++]!=1||x[p++]||x[p++]||x[p++])throw runtime_error("unsupported flags");
  uint64_t total=get64(x,p);uint32_t blocks=get32(x,p);
  if(total>(1ull<<34)||blocks>10000000)throw runtime_error("container limits exceeded");
  vector<uint8_t> out;out.reserve(size_t(total));
- vector<uint8_t> dict;
+ vector<uint8_t> rawdict,tokdict;
  for(uint32_t b=0;b<blocks;b++){
   if(p>=x.size())throw runtime_error("truncated block");
   uint8_t mode=x[p++],flags=x[p++];
+  if(mode==0){if(flags)throw runtime_error("unknown block flags");}
+  else if(mode==1){if(flags&~1u)throw runtime_error("unknown block flags");}
+  else if(mode==2){if(flags&~2u)throw runtime_error("unknown block flags");}
+  else throw runtime_error("unknown mode");
   uint32_t n=get32(x,p),sz=get32(x,p),transformed=get32(x,p),sum=get32(x,p);
-  if(flags&~1u)throw runtime_error("unknown block flags");
   if(n>4*1024*1024||sz>x.size()-p||out.size()+n>total)throw runtime_error("invalid block bounds");
   vector<uint8_t> q(x.begin()+p,x.begin()+p+sz);p+=sz;
   vector<uint8_t> v;
-  if(mode==0){if(sz!=n)throw runtime_error("raw block size mismatch");v=move(q);}
-  else if(mode==1){v.resize(n);inflate_raw(q,v,flags&1?dict:vector<uint8_t>());}
-  else if(mode==2){
+  if(mode==0){if(sz!=n)throw runtime_error("raw block size mismatch");v=move(q);rawdict.clear();tokdict.clear();}
+  else if(mode==1){
+   v.resize(n);inflate_raw(q,v,flags&1?rawdict:vector<uint8_t>());
+   rawdict.clear();tokdict.clear();
+  }else{
    if(transformed==0||transformed>8ull*n+1024)throw runtime_error("bad transformed size");
-   v.resize(transformed);inflate_raw(q,v,{});
-   v=detokenize(v,n);
-  }else throw runtime_error("unknown mode");
+   v.resize(transformed);inflate_raw(q,v,flags&2?tokdict:vector<uint8_t>());
+   vector<uint8_t> tokstream=move(v);
+   v=detokenize(tokstream,n);
+   rawdict.clear();
+   tokdict=move(tokstream);
+  }
   if(crc(v.data(),v.size())!=sum)throw runtime_error("CRC mismatch");
   out.insert(out.end(),v.begin(),v.end());
-  size_t dn=min<size_t>(v.size(),32768);dict.assign(v.end()-dn,v.end());
+  size_t dn=min<size_t>(v.size(),32768);rawdict.assign(v.end()-dn,v.end());
  }
  if(p!=x.size()||out.size()!=total)throw runtime_error("container size/trailing bytes mismatch");
  return out;
 }
-int main(int argc,char**argv){try{if(argc<4){cerr<<"usage: steno9 encode|decode input output [level=6] [block=1048576] [window=262144] [depth=1] [threads=0=auto]\n";return 2;}ifstream f(argv[2],ios::binary);if(!f)throw runtime_error("input open failed");vector<uint8_t>in((istreambuf_iterator<char>(f)),{});auto t=chrono::steady_clock::now();vector<uint8_t>out;if(string(argv[1])=="encode")out=encode(in,argc>4?stoi(argv[4]):6,argc>5?stoull(argv[5]):1048576,argc>6?stoull(argv[6]):262144,argc>7?stoi(argv[7]):1,argc>8?stoi(argv[8]):0);else if(string(argv[1])=="decode")out=decode(in);else throw runtime_error("unknown operation");auto e=chrono::steady_clock::now();ofstream g(argv[3],ios::binary);g.write(reinterpret_cast<const char*>(out.data()),out.size());if(!g)throw runtime_error("output write failed");double sec=chrono::duration<double>(e-t).count();cerr<<"input="<<in.size()<<" output="<<out.size()<<" seconds="<<sec<<" MiB_s="<<(sec?in.size()/1048576.0/sec:0)<<"\n";return 0;}catch(const exception&e){cerr<<"ERROR: "<<e.what()<<"\n";return 1;}}
+int main(int argc,char**argv){try{if(argc<4){cerr<<"usage: steno10 encode|decode input output [level=6] [block=1048576] [window=262144] [depth=1] [threads=0=auto]\n";return 2;}ifstream f(argv[2],ios::binary);if(!f)throw runtime_error("input open failed");vector<uint8_t>in((istreambuf_iterator<char>(f)),{});auto t=chrono::steady_clock::now();vector<uint8_t>out;if(string(argv[1])=="encode")out=encode(in,argc>4?stoi(argv[4]):6,argc>5?stoull(argv[5]):1048576,argc>6?stoull(argv[6]):262144,argc>7?stoi(argv[7]):1,argc>8?stoi(argv[8]):0);else if(string(argv[1])=="decode")out=decode(in);else throw runtime_error("unknown operation");auto e=chrono::steady_clock::now();ofstream g(argv[3],ios::binary);g.write(reinterpret_cast<const char*>(out.data()),out.size());if(!g)throw runtime_error("output write failed");double sec=chrono::duration<double>(e-t).count();cerr<<"input="<<in.size()<<" output="<<out.size()<<" seconds="<<sec<<" MiB_s="<<(sec?in.size()/1048576.0/sec:0)<<"\n";return 0;}catch(const exception&e){cerr<<"ERROR: "<<e.what()<<"\n";return 1;}}

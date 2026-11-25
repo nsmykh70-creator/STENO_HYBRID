@@ -1,6 +1,9 @@
 steno_hybrid
 steno8
 steno9
+steno9_ld
+steno10
+steno10_ld
 *_rebuilt
 *_prebuilt
 __pycache__/

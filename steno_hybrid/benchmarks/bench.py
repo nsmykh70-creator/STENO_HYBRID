@@ -1,5 +1,5 @@
 import json, lzma, os, pathlib, random, statistics, subprocess, tempfile, time, zlib
-ROOT=pathlib.Path(__file__).resolve().parents[1]; EXE=ROOT/'steno9'; R=random.Random(20261124); N=1024*1024
+ROOT=pathlib.Path(__file__).resolve().parents[1]; EXE=ROOT/'steno10'; R=random.Random(20261124); N=1024*1024
 text=('Это тестовый многоязычный текст. The quick brown fox jumps over the lazy dog. 中文测试 日本語 テスト ภาษาไทย.\n'*12000).encode()[:N]
 jsondata=(b'{"id":123,"name":"example_user","active":true,"values":[1,2,3,4,5],"message":"hello world"}\n'*20000)[:N]
 base45k=bytes(((i*7+i//50)%251) for i in range(45000))
@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory() as td:
    'zlib_encode_s':zt,'zlib_decode_s':zdt,'lzma_encode_s':lt,'lzma_decode_s':ldt})
 (ROOT/'benchmarks'/'results.json').write_text(json.dumps(rows,indent=2),encoding='utf-8')
 with (ROOT/'benchmarks'/'results.txt').open('w',encoding='utf-8') as f:
- f.write('STENO HYBRID v9 benchmark; 1 MiB synthetic corpora; 5 repetitions; medians; Python zlib/LZMA baselines.\n')
+ f.write('STENO HYBRID v10 (STN10) benchmark; 1 MiB synthetic corpora; 5 repetitions; medians; Python zlib/LZMA baselines.\n')
  f.write('Times include process wall time for STENO and in-process codec calls for baselines.\n')
  f.write('Corpora zeros..long_runs match the v8 protocol; period45k added in v9.\n\n')
  for x in rows:
