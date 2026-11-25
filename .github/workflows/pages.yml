@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Stage static site
-        run: mkdir -p _site && cp docs/index.html _site/ && touch _site/.nojekyll
+        run: mkdir -p _site && cp steno_hybrid/docs/index.html _site/ && touch _site/.nojekyll
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
