@@ -1,10 +1,10 @@
-# STN12 container format (little-endian)
+# STN13 container format (little-endian)
 
 ## File header (21 bytes)
 
 | Field | Size | Meaning |
 |---|---:|---|
-| Magic | 5 | ASCII `STN12` |
+| Magic | 5 | ASCII `STN13` |
 | Version | 1 | `1` |
 | Flags | 3 | must be zero |
 | Original size | 8 | total uncompressed bytes |
@@ -60,9 +60,10 @@ mode 3 wins on blocks with high-entropy length/distance distributions.
 ## Encoder mode selection
 
 Per block the encoder tries RAW, raw-DEFLATE(block), raw-DEFLATE(block+dict), and if the
-sparse 3-gram repetition prefilter passes, raw-DEFLATE(tokens), raw-DEFLATE(tokens+dict) and
-split-stream rANS (mode 3, blocks >= 16 KiB; at level 9 + depth >= 2 additionally the
-DP-parse stream, min of the two is kept); the shortest payload wins (ties in favor of the earlier candidate). The DEFLATE candidates
+sparse 3-gram repetition prefilter passes (skipped when a trained dictionary is present),
+raw-DEFLATE(tokens), raw-DEFLATE(tokens+dict) and split-stream rANS (mode 3, blocks >=
+16 KiB; at level 9 + depth >= 2 additionally the DP-parse stream, min of the two is kept;
+tokenizer distances may reference the trained dictionary); the shortest payload wins. (ties in favor of the earlier candidate). The DEFLATE candidates
 are computed in parallel over blocks; the token-dictionary candidate is validated against
 the previous block's actual winner. The file is rejected if block sizes do not sum to the
 declared original size or if trailing bytes remain.
