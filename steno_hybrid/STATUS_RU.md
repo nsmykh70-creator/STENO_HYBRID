@@ -26,3 +26,14 @@
 Реальные файлы: `benchmarks/stn12_vs_v11_RU.md`, `benchmarks/stn11_vs_v10_RU.md`, `benchmarks/stn10_vs_v9_RU.md`, `benchmarks/iter1_speed_RU.md`,
 `benchmarks/zlib_speed_comparison_RU.md`. Время — ядро кодека без файлового I/O;
 zlib/LZMA — in-process вызовы, поэтому сравнение времени ориентировочное.
+
+## WIP v16 (mode 4 + rolling tails, незавершено — 2026-11-25)
+- mode 4 (adaptive binary-tree rANS, контексты order-1 литералов, пер-блочная персистентность):
+  roundtrip OK, но честный выигрыш только ~1-2% на fb2, на коде проигрывает static order-0
+  (mdistc на вырожденных потоках). Оставлен как per-block кандидат (размеру не вредит).
+- modes 5/6 (rolling tail: mode 3/4 + prefix из последнего блока, cross-block matches):
+  encode работает, roundtrip на mode 6 ПАДАЕТ на decode с "bad tail size" — дебаг не закончен.
+- Сводка на fb2 (45.3 МиБ): m3 max=12.39 МиБ; d256=10.48; block4M+tail(mode6 d128)=10.74 (encode 3м44с,
+  decode баг); xz-6=8.0. Энтропия НЕ узкое место на тексте — узкое место матч-файндер/парсер.
+- Слеlующие шаги: (1) фикс "bad tail size" в decode_blocks mode 5/6; (2) ultra preset = block 4M win 4M d128
+  + tails; (3) полные тесты (force_mode=4/5/6 grid) и бенч-протокол; (4) релиз v16.
