@@ -1,5 +1,5 @@
 import os, random, subprocess, tempfile, pathlib, struct, zlib
-EXE=pathlib.Path(os.environ.get('STENO_EXE') or pathlib.Path(__file__).resolve().parents[1]/'steno13')
+EXE=pathlib.Path(os.environ.get('STENO_EXE') or pathlib.Path(__file__).resolve().parents[1]/'steno15')
 r=random.Random(88421)
 text='Русский текст и English text 中文 日本語 ไทย — UTF-8 проверка. '*3000
 jsondata=''.join('{"users":[{"id":%d,"name":"user_%d","active":true}]}\n'%(i,i) for i in range(1000))
@@ -215,3 +215,80 @@ with _tf.TemporaryDirectory() as td3:
   _sp.run([EX,'decode',str(arc),str(out)]+(['dict='+str(dpath)] if any(a.startswith('dict=') for a in args) else []),capture_output=True,check=True)
   assert out.read_bytes()==mix,('dict mix rt',args)
  print('dict x (max / force3 / block grid) round-trips: PASS')
+
+# ---- v15: мультифайловый контейнер pack/unpack (STN15) ----
+import tempfile as _tf, struct as _struct, os as _os
+with _tf.TemporaryDirectory() as td4:
+ _os.chdir(td4)
+ p4=pathlib.Path('.')
+ (p4/'src/data/logs').mkdir(parents=True); (p4/'src/bin').mkdir(parents=True)
+ for i in range(60):(p4/'src/data/logs'/f'r{i:03d}.log').write_bytes(f'2026-11-25 INFO user="user_{i%7}" action=query status=ok session="{i*7919:016x}"\n'.encode()*4)
+ (p4/'src/data/empty.txt').write_bytes(b'')
+ (p4/'src/bin/blob').write_bytes(bytes(range(256))*100)
+ (p4/'src/README').write_bytes(b'STENO pack test file\n'*20)
+ src=sorted(str(x.relative_to('src')) for x in (p4/'src').rglob('*') if x.is_file())
+ # детерминизм + roundtrip дерева
+ subprocess.check_call([EX,'pack','a.stn','src','block=8192'],stderr=subprocess.DEVNULL)
+ subprocess.check_call([EX,'pack','a2.stn','src','block=8192'],stderr=subprocess.DEVNULL)
+ assert pathlib.Path('a.stn').read_bytes()==pathlib.Path('a2.stn').read_bytes(),('pack determinism',)
+ subprocess.check_call([EX,'unpack','a.stn','out'],stderr=subprocess.DEVNULL)
+ dst=sorted(str(x.relative_to('out')) for x in (p4/'out').rglob('*') if x.is_file())
+ assert src==dst,('tree mismatch',src,dst)
+ for rel in src:assert (p4/'src'/rel).read_bytes()==(p4/'out'/rel).read_bytes(),('file mismatch',rel)
+ raw=sum((p4/'src'/rel).stat().st_size for rel in src)
+ asz=pathlib.Path('a.stn').stat().st_size
+ print(f'pack/unpack tree round-trip: PASS ({len(src)} files, {asz}B / {raw}B = {100*asz/raw:.1f}%)')
+ assert asz<raw,('pack must compress this corpus',)
+ # STN15-заголовок: fc в фикс-заголовке, далее [dict], таблица, блоки
+ b=pathlib.Path('a.stn').read_bytes()
+ assert b[:5]==b'STN15' and b[5]==1
+ fc=_struct.unpack_from('<I',b,21)[0];assert fc==len(src),('file count',fc)
+ # одиночный файл + пустой файл уже в дереве; decode отказывается от STN15
+ (p4/'one.txt').write_bytes(b'hello pack world'*100)
+ subprocess.check_call([EX,'pack','one.stn','one.txt'],stderr=subprocess.DEVNULL)
+ subprocess.check_call([EX,'unpack','one.stn','out_one'],stderr=subprocess.DEVNULL)
+ assert (p4/'out_one/one.txt').read_bytes()==(p4/'one.txt').read_bytes()
+ r=subprocess.run([EX,'decode','one.stn','x'],capture_output=True,text=True)
+ assert r.returncode!=0 and 'unpack' in r.stderr,('decode must refuse STN15',r.stderr)
+ print('single-file pack + decode refusal: PASS')
+ # обученный словарь: внешний требует dict=, встроенный нет
+ tr=p4/'samples';tr.mkdir()
+ for i in range(80):
+  with open(tr/f's{i:03d}.log','w') as g:
+   for j in range(1,6):g.write(f'2026-11-{20+j} 10:{i%60:02d}:00 INFO user="user_{i%7}" action=query status=ok latency_ms={50+i%900} session="{i*7919:016x}"\n')
+ subprocess.check_call([EX,'train','t.dict','samples','size=8192'],stderr=subprocess.DEVNULL)
+ subprocess.check_call([EX,'pack','ad.stn','src','block=8192','dict=t.dict'],stderr=subprocess.DEVNULL)
+ r=subprocess.run([EX,'unpack','ad.stn','outd'],capture_output=True,text=True)
+ assert r.returncode!=0 and 'dictionary' in r.stderr,('external unpack without dict must fail',r.stderr)
+ subprocess.check_call([EX,'unpack','ad.stn','outd','dict=t.dict'],stderr=subprocess.DEVNULL)
+ for rel in src:assert (p4/'src'/rel).read_bytes()==(p4/'outd'/rel).read_bytes(),('dict rt',rel)
+ subprocess.check_call([EX,'pack','ae.stn','src','block=8192','dict=t.dict','embed=1'],stderr=subprocess.DEVNULL)
+ subprocess.check_call([EX,'unpack','ae.stn','oute'],stderr=subprocess.DEVNULL)
+ for rel in src:assert (p4/'src'/rel).read_bytes()==(p4/'oute'/rel).read_bytes(),('embed rt',rel)
+ print('pack with trained dictionary (external + embedded): PASS')
+ # злонамеренные таблицы: '..' в пути, огромный path_len, расхождение сумм, битый CRC записи
+ subprocess.check_call([EX,'pack','m.stn','src','block=8192'],stderr=subprocess.DEVNULL)
+ b=bytearray(pathlib.Path('m.stn').read_bytes())
+ pl0=_struct.unpack_from('<H',b,25)[0]
+ ev=bytearray(b);ev[25:27]=_struct.pack('<H',10);ev[27:37]=b'../evil.txt'
+ (p4/'m1.stn').write_bytes(bytes(ev))
+ r=subprocess.run([EX,'unpack','m1.stn','mo1'],capture_output=True,text=True)
+ assert r.returncode!=0 and 'unsafe path' in r.stderr,('dotdot must fail',r.stderr)
+ ev=bytearray(b);ev[25:27]=_struct.pack('<H',2000)
+ (p4/'m2.stn').write_bytes(bytes(ev))
+ assert subprocess.run([EX,'unpack','m2.stn','mo2'],capture_output=True).returncode!=0,('huge path_len must fail',)
+ ev=bytearray(b);ev[9:17]=_struct.pack('<Q',999999)
+ (p4/'m3.stn').write_bytes(bytes(ev))
+ assert subprocess.run([EX,'unpack','m3.stn','mo3'],capture_output=True).returncode!=0,('sum mismatch must fail',)
+ sz0=_struct.unpack_from('<Q',b,27+pl0)[0]
+ ev=bytearray(b);_struct.pack_into('<I',ev,27+pl0+8,0xDEADBEEF)
+ (p4/'m4.stn').write_bytes(bytes(ev))
+ r=subprocess.run([EX,'unpack','m4.stn','mo4'],capture_output=True,text=True)
+ assert r.returncode!=0 and 'file CRC mismatch' in r.stderr,('crc must fail',r.stderr)
+ print('malicious file-table rejection (traversal/huge len/sum/CRC): PASS')
+ # сетка опций pack: level/block/window/depth/threads/force
+ for opts in [['level=9','block=65536'],['fast','block=4096','threads=2'],['block=8192','force_mode=3'],['max','block=8192','window=65536','depth=16','threads=2']]:
+  subprocess.check_call([EX,'pack','o.stn','src']+opts,stderr=subprocess.DEVNULL)
+  subprocess.check_call([EX,'unpack','o.stn','oo'],stderr=subprocess.DEVNULL)
+  for rel in src:assert (p4/'src'/rel).read_bytes()==(p4/'oo'/rel).read_bytes(),('opts rt',opts,rel)
+ print('pack option grid: PASS')

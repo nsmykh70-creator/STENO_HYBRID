@@ -67,3 +67,27 @@ tokenizer distances may reference the trained dictionary); the shortest payload 
 are computed in parallel over blocks; the token-dictionary candidate is validated against
 the previous block's actual winner. The file is rejected if block sizes do not sum to the
 declared original size or if trailing bytes remain.
+
+## STN15 multi-file container (since v15)
+
+`pack` concatenates all input files (directories are walked recursively, entries sorted
+by stored path) into one content stream, encodes it with the regular STN13 block
+pipeline, and wraps it:
+
+```
+'STN15' | ver u8 = 1 | header flags (bit0 external dict, bit1 embedded dict)
+u64 total            = sum of file sizes = content stream length
+u32 blocks           = block count of the STN13 block stream
+u32 file_count       = number of files (<= 1_000_000)
+[embedded dictionary section, same as STN13: u32 size (<=1 MiB) + bytes]
+file table, per file:
+  u16 path_len (1..1024) | path bytes (relative, validated) | u64 size | u32 CRC32
+block stream (identical layout to STN13)
+```
+
+Stored paths must be relative and safe: non-empty, <=1024 bytes, no leading `/`, no "."
+or ".." components, no NUL; validated on pack (input walk) and again on unpack (archive
+parse). Unpack decodes the content stream into a temporary file (same mmap-write path as
+decode), then splits it by the table, verifying each file's CRC32. Block CRCs already
+protect the stream; per-file CRCs catch table/content mismatches. The `decode` operation
+refuses STN15 archives with a hint to use `unpack`.

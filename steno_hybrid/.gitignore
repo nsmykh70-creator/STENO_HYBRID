@@ -1,5 +1,6 @@
 steno_hybrid
 steno8
+steno8_ld
 steno9
 steno9_ld
 steno10
@@ -12,6 +13,8 @@ steno13
 steno13_ld
 steno14
 steno14_ld
+steno15
+steno15_ld
 *_rebuilt
 *_prebuilt
 __pycache__/

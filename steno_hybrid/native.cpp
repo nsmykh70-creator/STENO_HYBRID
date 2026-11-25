@@ -19,6 +19,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <set>
 #include <vector>
 using namespace std;
 static void put32(vector<uint8_t>&o,uint32_t x){for(int i=0;i<4;i++)o.push_back(uint8_t(x>>(8*i)));}
@@ -708,6 +709,126 @@ static vector<uint8_t> encode(const uint8_t*in,size_t insz,int level,size_t bs,s
  }
  return o;
 }
+// ---- multi-file container (STN15, since v15) ----
+// "pack" concatenates the input files into one content stream, encodes it with the
+// regular STN13 block pipeline (all modes, cross-block dictionaries, trained dictionary)
+// and wraps the block stream in an STN15 header that adds the file table:
+//   'STN15' | ver 1 | header flags | u64 total | u32 blocks | u32 file_count
+//   [embedded dictionary section, same as STN13]
+//   per file: u16 path_len | path bytes | u64 size | u32 CRC32
+//   blocks (identical layout to STN13)
+// Paths are stored relative and validated on both sides (pack walk and archive parse):
+// non-empty, <=1024 bytes, no leading '/', no "." or ".." components, no NUL. Per-file
+// CRCs are checked on unpack; block CRCs already protect the stream itself.
+struct PackedFile{string path;uint64_t size;uint32_t crc;};
+struct ContainerInfo{
+ uint8_t flags=0;uint64_t total=0;uint32_t blocks=0;
+ vector<uint8_t> dict;
+ vector<PackedFile> files; // empty for STN13
+ size_t blocks_start=0;
+};
+static bool safe_rel_path(const string&p){
+ if(p.empty()||p.size()>1024||p[0]=='/'||p.find('\0')!=string::npos)return false;
+ if(p.back()=='/')return false;
+ size_t s=0;
+ for(;;){
+  size_t e=p.find('/',s);
+  string comp=p.substr(s,e==string::npos?string::npos:e-s);
+  if(comp.empty()||comp=="."||comp=="..")return false;
+  if(e==string::npos)return true;
+  s=e+1;
+ }
+}
+static ContainerInfo parse_container(const uint8_t*x,size_t xsz){
+ ContainerInfo ci;
+ if(xsz<21)throw runtime_error("bad STN header");
+ bool is15=!memcmp(x,"STN15",5);
+ if(!is15&&memcmp(x,"STN13",5))throw runtime_error("bad STN header");
+ size_t p=5;
+ if(x[p++]!=1)throw runtime_error("unsupported version");
+ uint8_t hf0=x[p++],hf1=x[p++],hf2=x[p++];
+ if(hf1||hf2||(hf0&~3u)||(hf0&3u)==3u)throw runtime_error("unsupported header flags");
+ ci.flags=hf0;
+ ci.total=get64p(x,p,xsz);ci.blocks=get32p(x,p,xsz);
+ if(ci.total>(1ull<<34)||ci.blocks>10000000)throw runtime_error("container limits exceeded");
+ uint32_t fc=0;
+ if(is15){ // STN15 header: file count lives in the fixed header, before the dictionary section
+  fc=get32p(x,p,xsz);
+  if(fc>1000000)throw runtime_error("too many files");
+ }
+ if(hf0&2){
+  uint32_t ds=get32p(x,p,xsz);
+  if(ds>(1u<<20)||p+ds>xsz)throw runtime_error("bad dictionary section");
+  ci.dict.assign(x+p,x+p+ds);p+=ds;
+ }
+ if(is15){
+  ci.files.reserve(fc);
+  for(uint32_t i=0;i<fc;i++){
+   if(p+2>xsz)throw runtime_error("truncated file table");
+   uint32_t pl=x[p]|(uint32_t(x[p+1])<<8);p+=2;
+   if(!pl||pl>1024||p+pl>xsz)throw runtime_error("bad file path length");
+   string path(reinterpret_cast<const char*>(x+p),pl);p+=pl;
+   if(!safe_rel_path(path))throw runtime_error("unsafe path in archive: "+path);
+   uint64_t sz=get64p(x,p,xsz);uint32_t cc=get32p(x,p,xsz);
+   ci.files.push_back({move(path),sz,cc});
+  }
+  uint64_t s=0;for(const auto&f:ci.files)s+=f.size;
+  if(s!=ci.total)throw runtime_error("file table does not match total size");
+ }
+ ci.blocks_start=p;
+ return ci;
+}
+// shared block decode loop: hands every decoded block to the sink; used by decode
+// (memory-mapped output file) and by unpack (temp content file)
+using DecodeSink=void(*)(void*,const uint8_t*,size_t);
+static void decode_blocks(const uint8_t*x,size_t xsz,size_t p,uint64_t total,uint32_t blocks,const vector<uint8_t>&dict,DecodeSink sink,void*ctx){
+ size_t woff=0;
+ vector<uint8_t> rawdict,tokdict;
+ for(uint32_t b=0;b<blocks;b++){
+  if(p>=xsz)throw runtime_error("truncated block");
+  uint8_t mode=x[p++],flags=x[p++];
+  if(mode==0){if(flags)throw runtime_error("unknown block flags");}
+  else if(mode==1){if((flags&~3u)||flags==3)throw runtime_error("unknown block flags");}
+  else if(mode==2){if(flags&~2u)throw runtime_error("unknown block flags");}
+  else if(mode==3){if(flags)throw runtime_error("unknown block flags");}
+  else throw runtime_error("unknown mode");
+  uint32_t n=get32p(x,p,xsz),sz=get32p(x,p,xsz),transformed=get32p(x,p,xsz),sum=get32p(x,p,xsz);
+  if(n>4*1024*1024||sz>xsz-p||woff+n>total)throw runtime_error("invalid block bounds");
+  const uint8_t*pl=x+p;p+=sz; // payloads are inflated straight from the mapping
+  vector<uint8_t> v;
+  if(mode==0){if(sz!=n)throw runtime_error("raw block size mismatch");v.assign(pl,pl+n);rawdict.clear();tokdict.clear();}
+  else if(mode==1){
+   const uint8_t*pd=nullptr;size_t pdn=0;
+   if(flags&1){pd=rawdict.data();pdn=rawdict.size();}else if(flags&2){pd=dict.data();pdn=dict.size();}
+   v.resize(n);inflate_raw(pl,sz,v,pd,pdn);
+   rawdict.clear();tokdict.clear();
+  }else if(mode==2){
+   if(transformed==0||transformed>8ull*n+1024)throw runtime_error("bad transformed size");
+   v.resize(transformed);
+   const uint8_t*pd=nullptr;size_t pdn=0;
+   if(flags&2){pd=tokdict.data();pdn=tokdict.size();}
+   inflate_raw(pl,sz,v,pd,pdn);
+   vector<uint8_t> tokstream=move(v);
+   v=detokenize(tokstream,n,dict);
+   rawdict.clear();
+   tokdict=move(tokstream);
+  }else{
+   if(transformed==0||transformed>8ull*n+1024)throw runtime_error("bad transformed size");
+   v=rans_decode(vector<uint8_t>(pl,pl+sz),n,transformed,dict);
+   rawdict.clear();tokdict.clear();
+  }
+  if(crc(v.data(),v.size())!=sum)throw runtime_error("CRC mismatch");
+  sink(ctx,v.data(),v.size());
+  woff+=v.size();
+  size_t dn=min<size_t>(v.size(),32768);rawdict.assign(v.end()-dn,v.end());
+ }
+ if(p!=xsz||woff!=total)throw runtime_error("container size/trailing bytes mismatch");
+}
+struct WriteSinkCtx{uint8_t*omap;vector<uint8_t>*outbuf;size_t woff;};
+static void write_sink(WriteSinkCtx*c,const uint8_t*d,size_t n){
+ if(c->omap)memcpy(c->omap+c->woff,d,n);else c->outbuf->insert(c->outbuf->end(),d,d+n);
+ c->woff+=n;
+}
 // Decode: archive bytes come from a read-only mapping (no heap copy of the archive);
 // decoded blocks go straight into a shared mapping of the output file (ftruncate to the
 // header's total, so the file is grown once and sparsely), keeping the heap peak at one
@@ -715,20 +836,9 @@ static vector<uint8_t> encode(const uint8_t*in,size_t insz,int level,size_t bs,s
 // written at the end (old behavior). On any failure the partial output file is removed.
 // Returns the decoded total size (for the stats line).
 static uint64_t decode_write(const uint8_t*x,size_t xsz,const vector<uint8_t>&dict_cli,const char*outpath){
- if(xsz<21||memcmp(x,"STN13",5))throw runtime_error("bad STN13 header");
- size_t p=5;
- if(x[p++]!=1)throw runtime_error("unsupported version");
- uint8_t hf0=x[p++],hf1=x[p++],hf2=x[p++];
- if(hf1||hf2||(hf0&~3u))throw runtime_error("unsupported header flags");
- if((hf0&3u)==3u)throw runtime_error("unsupported header flags");
- uint64_t total=get64p(x,p,xsz);uint32_t blocks=get32p(x,p,xsz);
- if(total>(1ull<<34)||blocks>10000000)throw runtime_error("container limits exceeded");
- vector<uint8_t> dict;
- if(hf0&2){
-  uint32_t ds=get32p(x,p,xsz);
-  if(ds>(1u<<20)||p+ds>xsz)throw runtime_error("bad dictionary section");
-  dict.assign(x+p,x+p+ds);p+=ds;
- }else if(hf0&1){
+ ContainerInfo ci=parse_container(x,xsz);
+ vector<uint8_t> dict=ci.dict;
+ if(ci.flags&1){
   if(dict_cli.empty())throw runtime_error("archive needs its trained dictionary (pass dict=path)");
   dict=dict_cli;
  }
@@ -736,60 +846,21 @@ static uint64_t decode_write(const uint8_t*x,size_t xsz,const vector<uint8_t>&di
  if(ofd<0)throw runtime_error("output open failed");
  uint8_t*omap=nullptr;
  vector<uint8_t> outbuf; // fallback when the output cannot be mapped
- size_t woff=0;
- if(total>0&&ftruncate(ofd,off_t(total))==0){
-  void*mp=mmap(nullptr,size_t(total),PROT_READ|PROT_WRITE,MAP_SHARED,ofd,0);
+ if(ci.total>0&&ftruncate(ofd,off_t(ci.total))==0){
+  void*mp=mmap(nullptr,size_t(ci.total),PROT_READ|PROT_WRITE,MAP_SHARED,ofd,0);
   if(mp!=MAP_FAILED){omap=(uint8_t*)mp;}
  }
- vector<uint8_t> rawdict,tokdict;
+ WriteSinkCtx sc{omap,&outbuf,0};
  try{
-  for(uint32_t b=0;b<blocks;b++){
-   if(p>=xsz)throw runtime_error("truncated block");
-   uint8_t mode=x[p++],flags=x[p++];
-   if(mode==0){if(flags)throw runtime_error("unknown block flags");}
-   else if(mode==1){if((flags&~3u)||flags==3)throw runtime_error("unknown block flags");}
-   else if(mode==2){if(flags&~2u)throw runtime_error("unknown block flags");}
-   else if(mode==3){if(flags)throw runtime_error("unknown block flags");}
-   else throw runtime_error("unknown mode");
-   uint32_t n=get32p(x,p,xsz),sz=get32p(x,p,xsz),transformed=get32p(x,p,xsz),sum=get32p(x,p,xsz);
-   if(n>4*1024*1024||sz>xsz-p||woff+n>total)throw runtime_error("invalid block bounds");
-   const uint8_t*pl=x+p;p+=sz; // payloads are inflated straight from the mapping
-   vector<uint8_t> v;
-   if(mode==0){if(sz!=n)throw runtime_error("raw block size mismatch");v.assign(pl,pl+n);rawdict.clear();tokdict.clear();}
-   else if(mode==1){
-    const uint8_t*pd=nullptr;size_t pdn=0;
-    if(flags&1){pd=rawdict.data();pdn=rawdict.size();}else if(flags&2){pd=dict.data();pdn=dict.size();}
-    v.resize(n);inflate_raw(pl,sz,v,pd,pdn);
-    rawdict.clear();tokdict.clear();
-   }else if(mode==2){
-    if(transformed==0||transformed>8ull*n+1024)throw runtime_error("bad transformed size");
-    v.resize(transformed);
-    const uint8_t*pd=nullptr;size_t pdn=0;
-    if(flags&2){pd=tokdict.data();pdn=tokdict.size();}
-    inflate_raw(pl,sz,v,pd,pdn);
-    vector<uint8_t> tokstream=move(v);
-    v=detokenize(tokstream,n,dict);
-    rawdict.clear();
-    tokdict=move(tokstream);
-   }else{
-    if(transformed==0||transformed>8ull*n+1024)throw runtime_error("bad transformed size");
-    v=rans_decode(vector<uint8_t>(pl,pl+sz),n,transformed,dict);
-    rawdict.clear();tokdict.clear();
-   }
-   if(crc(v.data(),v.size())!=sum)throw runtime_error("CRC mismatch");
-   if(omap)memcpy(omap+woff,v.data(),v.size());
-   else outbuf.insert(outbuf.end(),v.begin(),v.end());
-   woff+=v.size();
-   size_t dn=min<size_t>(v.size(),32768);rawdict.assign(v.end()-dn,v.end());
-  }
-  if(p!=xsz||woff!=total)throw runtime_error("container size/trailing bytes mismatch");
+  decode_blocks(x,xsz,ci.blocks_start,ci.total,ci.blocks,dict,
+   [](void*c,const uint8_t*d,size_t n){write_sink((WriteSinkCtx*)c,d,n);},&sc);
  }catch(...){
-  if(omap)munmap(omap,size_t(total));
+  if(omap)munmap(omap,size_t(ci.total));
   close(ofd);
   ::unlink(outpath);
   throw;
  }
- if(omap)munmap(omap,size_t(total));
+ if(omap)munmap(omap,size_t(ci.total));
  else if(!outbuf.empty()){
   size_t done=0;
   while(done<outbuf.size()){
@@ -799,16 +870,20 @@ static uint64_t decode_write(const uint8_t*x,size_t xsz,const vector<uint8_t>&di
   }
  }
  close(ofd);
- return total;
+ return ci.total;
 }
 int main(int argc,char**argv){try{
- if(argc<4){cerr<<"usage: steno14 encode input output [level=6|fast|default|max] [block=1048576] [window=262144] [depth=1] [threads=0=auto] [force_mode=0] [dict=path] [embed=0|1]\n"
-                 "       steno14 decode input output [dict=path]\n"
-                 "       steno14 train output.dict input... [size=32768]   (inputs: files or directories)\n"
-                 "dict: trained dictionary; encode stores it externally by default (embed=1 embeds it);\n"
-                 "      decode requires dict=path for external-dictionary archives\n"
-                 "I/O: input files are mmapped; decode writes into a mmapped output file (since v14).\n"
-                 "Container format is unchanged (STN13).\n";return 2;}
+ if(argc<4){cerr<<"usage: steno15 encode input output [level=6|fast|default|max] [block=1048576] [window=262144] [depth=1] [threads=0=auto] [force_mode=0] [dict=path] [embed=0|1]\n"
+                 "       steno15 decode input output [dict=path]\n"
+                 "       steno15 pack output.stn input... [level=..|fast|default|max] [block=..] [window=..] [depth=..] [threads=..] [force_mode=..] [dict=path] [embed=0|1]\n"
+                 "       steno15 unpack input output_dir [dict=path]\n"
+                 "       steno15 train output.dict input... [size=32768]   (inputs: files or directories)\n"
+                 "pack/unpack: multi-file archive (STN15) — one header and one block stream for all\n"
+                 "  files (paths stored relative, validated), so cross-block dictionaries and the\n"
+                 "  trained dictionary span every file; options are key=value tokens.\n"
+                 "dict: trained dictionary; encode/pack stores it externally by default (embed=1 embeds\n"
+                 "      it); decode/unpack require dict=path for external-dictionary archives\n"
+                 "I/O: input files are mmapped; decode/unpack write into mmapped output files.\n";return 2;}
  if(string(argv[1])=="train"){
   uint32_t budget=32768;vector<string> inputs;
   for(int i=3;i<argc;i++){string s=argv[i];if(s.rfind("size=",0)==0)budget=stoul(s.substr(5));else inputs.push_back(s);}
@@ -825,7 +900,8 @@ int main(int argc,char**argv){try{
  vector<uint8_t>out;
  uint64_t dec_total=0;
  size_t isz=0;
- uint8_t*imp=map_file_ro(argv[2],isz);
+ uint8_t*imp=nullptr; // pack takes its inputs later; argv[2] is the OUTPUT archive there
+ if(string(argv[1])!="pack")imp=map_file_ro(argv[2],isz);
  auto t=chrono::steady_clock::now();
  if(string(argv[1])=="encode"){
   int level=6,depth=1;
@@ -845,7 +921,80 @@ int main(int argc,char**argv){try{
    if(argc>11)embed=string(argv[11])=="embed=1"||string(argv[11])=="1";
   }
   out=encode(imp,isz,level,bs,win,depth,thr,force,dict,embed);
+ }else if(string(argv[1])=="pack"){
+  if(argc<4)throw runtime_error("pack requires inputs");
+  int level=6,depth=1,thr=0,force=0;size_t bs=1048576,win=262144;bool embed=false;
+  vector<uint8_t> dict;vector<string> inputs;
+  for(int i=3;i<argc;i++){
+   string s=argv[i];
+   auto kw=[&](const char*k)->bool{return s.rfind(string(k)+"=",0)==0;};
+   if(kw("level"))level=stoi(s.substr(6));
+   else if(s=="fast")level=2;
+   else if(s=="max"){level=9;depth=16;}
+   else if(s=="default"){}
+   else if(kw("block"))bs=stoull(s.substr(6));
+   else if(kw("window"))win=stoull(s.substr(7));
+   else if(kw("depth"))depth=stoi(s.substr(6));
+   else if(kw("threads"))thr=stoi(s.substr(8));
+   else if(kw("force_mode"))force=stoi(s.substr(11));
+   else if(kw("dict")){
+    ifstream df(s.substr(5),ios::binary);
+    if(!df)throw runtime_error("dictionary open failed");
+    dict.assign((istreambuf_iterator<char>(df)),{});
+    if(dict.size()>(1u<<20))throw runtime_error("dictionary too large (max 1 MiB)");
+   }else if(kw("embed"))embed=s.substr(6)=="1";
+   else inputs.push_back(s);
+  }
+  if(inputs.empty())throw runtime_error("pack: no input files");
+  vector<pair<string,string>> entries; // (path on disk, stored archive path)
+  for(const auto&inp:inputs){
+   struct stat stt{};
+   if(::stat(inp.c_str(),&stt)!=0)throw runtime_error("input not found: "+inp);
+   if(S_ISDIR(stt.st_mode)){
+    string p0=inp;while(p0.size()>1&&p0.back()=='/')p0.pop_back();
+    vector<string> sub;list_files(p0,sub);
+    if(sub.empty())throw runtime_error("directory has no regular files: "+inp);
+    for(const auto&c:sub){
+     if(c.size()<=p0.size()||c.compare(0,p0.size(),p0)||c[p0.size()]!='/')throw runtime_error("path walk error: "+c);
+     entries.push_back({c,c.substr(p0.size()+1)});
+    }
+   }else if(S_ISREG(stt.st_mode)){
+    if(!inp.empty()&&inp[0]=='/')throw runtime_error("pack: absolute input paths are not supported; use paths relative to the current directory: "+inp);
+    entries.push_back({inp,inp});
+   }
+   else throw runtime_error("not a regular file or directory: "+inp);
+  }
+  sort(entries.begin(),entries.end(),
+   [](const pair<string,string>&a,const pair<string,string>&b){return a.second<b.second;});
+  {
+   set<string> seen;
+   for(const auto&e:entries){
+    if(!safe_rel_path(e.second))throw runtime_error("unsafe or overlong path: "+e.second);
+    if(!seen.insert(e.second).second)throw runtime_error("duplicate path: "+e.second);
+   }
+  }
+  vector<uint8_t> content;vector<uint8_t> table;
+  for(const auto&e:entries){
+   size_t n=0;uint8_t*mp=map_file_ro(e.first.c_str(),n);
+   uint32_t cc=crc(mp,n);
+   size_t before=content.size();content.resize(before+n);
+   if(n)memcpy(content.data()+before,mp,n);
+   unmap_file(mp,n);
+   put16(table,uint32_t(e.second.size()));
+   table.insert(table.end(),e.second.begin(),e.second.end());
+   put64(table,uint64_t(n));put32(table,cc);
+  }
+  isz=content.size(); // meaningful stats line for pack
+  vector<uint8_t> st=encode(content.data(),content.size(),level,bs,win,depth,thr,force,dict,embed);
+  ContainerInfo ci=parse_container(st.data(),st.size());
+  vector<uint8_t> o={'S','T','N','1','5',1,ci.flags,0,0};
+  put64(o,ci.total);put32(o,ci.blocks);put32(o,uint32_t(entries.size()));
+  if(ci.flags&2){put32(o,uint32_t(ci.dict.size()));o.insert(o.end(),ci.dict.begin(),ci.dict.end());}
+  o.insert(o.end(),table.begin(),table.end());
+  o.insert(o.end(),st.begin()+ptrdiff_t(ci.blocks_start),st.end());
+  out=move(o);
  }else if(string(argv[1])=="decode"){
+  if(isz>=5&&!memcmp(imp,"STN15",5))throw runtime_error("multi-file archive: use unpack");
   vector<uint8_t> dict_cli;
   if(argc>4){
    string s=argv[4];
@@ -856,6 +1005,49 @@ int main(int argc,char**argv){try{
    if(dict_cli.size()>(1u<<20))throw runtime_error("dictionary too large (max 1 MiB)");
   }
   dec_total=decode_write(imp,isz,dict_cli,argv[3]);
+ }else if(string(argv[1])=="unpack"){
+  if(argc<4)throw runtime_error("unpack requires an output directory");
+  vector<uint8_t> dict_cli;
+  if(argc>4){
+   string s=argv[4];
+   if(s.rfind("dict=",0)!=0)throw runtime_error("expected dict=path as the 4th argument");
+   ifstream df(s.substr(5),ios::binary);
+   if(!df)throw runtime_error("dictionary open failed");
+   dict_cli.assign((istreambuf_iterator<char>(df)),{});
+   if(dict_cli.size()>(1u<<20))throw runtime_error("dictionary too large (max 1 MiB)");
+  }
+  ContainerInfo ci=parse_container(imp,isz);
+  if(ci.files.empty())throw runtime_error("not a multi-file archive (use decode)");
+  vector<uint8_t> dict=ci.dict;
+  if(ci.flags&1){
+   if(dict_cli.empty())throw runtime_error("archive needs its trained dictionary (pass dict=path)");
+   dict=dict_cli;
+  }
+  string outdir=argv[3];
+  if(::mkdir(outdir.c_str(),0777)!=0&&errno!=EEXIST)throw runtime_error("cannot create output directory");
+  string tmp=outdir+"/.steno-pack.tmp";
+  decode_write(imp,isz,dict_cli,tmp.c_str());
+  try{
+   size_t cn=0;uint8_t*cm=map_file_ro(tmp.c_str(),cn);
+   if(cn!=ci.total){unmap_file(cm,cn);throw runtime_error("content size mismatch");}
+   size_t off=0;
+   for(const auto&f:ci.files){
+    if(crc(cm+off,f.size)!=f.crc)throw runtime_error("file CRC mismatch: "+f.path);
+    string fp=outdir+"/"+f.path;
+    size_t s2=0;
+    while((s2=fp.find('/',s2))!=string::npos){::mkdir(fp.substr(0,s2).c_str(),0777);s2++;}
+    ofstream g(fp,ios::binary);
+    if(!g)throw runtime_error("cannot create "+fp);
+    if(f.size)g.write(reinterpret_cast<const char*>(cm+off),streamsize(f.size));
+    g.close();
+    if(!g)throw runtime_error("write failed: "+fp);
+    off+=size_t(f.size);
+   }
+   unmap_file(cm,cn);
+  }catch(...){::unlink(tmp.c_str());throw;}
+  ::unlink(tmp.c_str());
+  dec_total=ci.total;
+  cerr<<"unpacked "<<ci.files.size()<<" files\n";
  }
  else{unmap_file(imp,isz);throw runtime_error("unknown operation");}
  unmap_file(imp,isz);
@@ -863,8 +1055,11 @@ int main(int argc,char**argv){try{
  if(string(argv[1])=="encode"){
   ofstream g(argv[3],ios::binary);g.write(reinterpret_cast<const char*>(out.data()),out.size());
   if(!g)throw runtime_error("output write failed");
+ }else if(string(argv[1])=="pack"){
+  ofstream g(argv[2],ios::binary);g.write(reinterpret_cast<const char*>(out.data()),out.size());
+  if(!g)throw runtime_error("output write failed");
  }
  double sec=chrono::duration<double>(e-t).count();
- cerr<<"input="<<isz<<" output="<<(string(argv[1])=="encode"?out.size():size_t(dec_total))<<" seconds="<<sec<<" MiB_s="<<(sec?isz/1048576.0/sec:0)<<"\n";
+ cerr<<"input="<<isz<<" output="<<((string(argv[1])=="encode"||string(argv[1])=="pack")?out.size():size_t(dec_total))<<" seconds="<<sec<<" MiB_s="<<(sec?isz/1048576.0/sec:0)<<"\n";
  return 0;
 }catch(const exception&e){cerr<<"ERROR: "<<e.what()<<"\n";return 1;}}
