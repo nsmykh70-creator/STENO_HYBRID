@@ -872,6 +872,23 @@ static uint64_t decode_write(const uint8_t*x,size_t xsz,const vector<uint8_t>&di
  close(ofd);
  return ci.total;
 }
+// Pure-memory decode (no file I/O): used by the WebAssembly build and handy for tests.
+// Handles STN13 archives; STN15 multi-file archives are rejected (the browser build has
+// no pack/unpack). The archive may be a mapping or any heap buffer.
+static vector<uint8_t> decode_buffer(const uint8_t*x,size_t xsz,const vector<uint8_t>&dict_cli){
+ ContainerInfo ci=parse_container(x,xsz);
+ if(!ci.files.empty())throw runtime_error("multi-file archive: unpack is not available in this build");
+ vector<uint8_t> dict=ci.dict;
+ if(ci.flags&1){
+  if(dict_cli.empty())throw runtime_error("archive needs its trained dictionary (pass dict=path)");
+  dict=dict_cli;
+ }
+ vector<uint8_t> out;out.reserve(ci.total);
+ WriteSinkCtx sc{nullptr,&out,0};
+ decode_blocks(x,xsz,ci.blocks_start,ci.total,ci.blocks,dict,
+  [](void*c,const uint8_t*d,size_t n){write_sink((WriteSinkCtx*)c,d,n);},&sc);
+ return out;
+}
 int main(int argc,char**argv){try{
  if(argc<4){cerr<<"usage: steno15 encode input output [level=6|fast|default|max] [block=1048576] [window=262144] [depth=1] [threads=0=auto] [force_mode=0] [dict=path] [embed=0|1]\n"
                  "       steno15 decode input output [dict=path]\n"

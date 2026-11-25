@@ -1,6 +1,6 @@
 # STENO HYBRID v15
 
-Экспериментальный блочный lossless-кодек C++17. Форматы: STN13 (однопоточные архивы,
+Экспериментальный блочный lossless-кодек C++17. **[Готовые сборки — Releases](https://github.com/nsmykh70-creator/STENO_HYBRID/releases)** (Linux/Windows/Android) и **[веб-версия в браузере](https://nsmykh70-creator.github.io/STENO_HYBRID/)** (офлайн, файлы не покидают устройство). Английская версия: [README.md](README.md). Реальные бенчи против gzip/zstd/xz/bzip2: [benchmarks/stn15_vs_codecs_RU.md](benchmarks/stn15_vs_codecs_RU.md), портативные сборки: [portable/README_RU.md](portable/README_RU.md). Форматы: STN13 (однопоточные архивы,
 как в v13/v14) и STN15 (мультифайловые архивы pack/unpack, v15). Взаимно несовместимы
 с STN8–STN12.
 

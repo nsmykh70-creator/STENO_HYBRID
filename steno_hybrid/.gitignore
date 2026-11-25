@@ -20,3 +20,4 @@ steno15_ld
 __pycache__/
 *.pyc
 build_warn.txt
+portable/vendor/
