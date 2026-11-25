@@ -3,7 +3,10 @@
 #include <libdeflate.h>
 #endif
 #include <dirent.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -21,19 +24,39 @@ using namespace std;
 static void put32(vector<uint8_t>&o,uint32_t x){for(int i=0;i<4;i++)o.push_back(uint8_t(x>>(8*i)));}
 static void put64(vector<uint8_t>&o,uint64_t x){for(int i=0;i<8;i++)o.push_back(uint8_t(x>>(8*i)));}
 static uint32_t get32(const vector<uint8_t>&x,size_t&p){if(p+4>x.size())throw runtime_error("truncated u32");uint32_t v=0;for(int i=0;i<4;i++)v|=uint32_t(x[p++])<<(8*i);return v;}
-static uint64_t get64(const vector<uint8_t>&x,size_t&p){if(p+8>x.size())throw runtime_error("truncated u64");uint64_t v=0;for(int i=0;i<8;i++)v|=uint64_t(x[p++])<<(8*i);return v;}
+static uint32_t get32p(const uint8_t*x,size_t&p,size_t lim){if(p+4>lim)throw runtime_error("truncated u32");uint32_t v=0;for(int i=0;i<4;i++)v|=uint32_t(x[p++])<<(8*i);return v;}
+static uint64_t get64p(const uint8_t*x,size_t&p,size_t lim){if(p+8>lim)throw runtime_error("truncated u64");uint64_t v=0;for(int i=0;i<8;i++)v|=uint64_t(x[p++])<<(8*i);return v;}
 static uint32_t crc(const uint8_t*p,size_t n){return ::crc32(0L,p,(uInt)n);}
+// ---- mmap I/O (since v14) ----
+// Inputs are mapped read-only (MADV_SEQUENTIAL) instead of being copied into heap
+// vectors; decode writes decoded blocks straight into a shared mapping of the output
+// file, so the heap peak stays at one block and a failed decode unlinks the partial
+// output. Empty files map to nullptr (handled by callers); any mmap failure throws.
+static uint8_t* map_file_ro(const char*path,size_t&n){
+ int fd=open(path,O_RDONLY);
+ if(fd<0)throw runtime_error("input open failed");
+ struct stat st{};
+ if(fstat(fd,&st)!=0||st.st_size<0){close(fd);throw runtime_error("input stat failed");}
+ n=size_t(st.st_size);
+ if(n==0){close(fd);return nullptr;}
+ void*p=mmap(nullptr,n,PROT_READ,MAP_PRIVATE,fd,0);
+ close(fd);
+ if(p==MAP_FAILED)throw runtime_error("mmap input failed");
+ madvise(p,n,MADV_SEQUENTIAL);
+ return (uint8_t*)p;
+}
+static void unmap_file(uint8_t*p,size_t n){if(p)munmap(p,n);}
 // DEFLATE stage. Without a preset dictionary libdeflate is used when compiled in
 // (same raw-DEFLATE format, faster); with a dictionary we fall back to zlib, because
 // libdeflate does not implement preset dictionaries. The two producers are
 // interoperable: the container stores raw DEFLATE either way.
-static vector<uint8_t> deflate_raw(const vector<uint8_t>&a,int level,const vector<uint8_t>&dict){
+static vector<uint8_t> deflate_raw(const uint8_t*a,size_t n,int level,const uint8_t*d,size_t dn){
 #ifdef HAVE_LIBDEFLATE
- if(dict.empty()){
+ if(!dn){
   struct libdeflate_compressor*c=libdeflate_alloc_compressor(level);
   if(!c)throw runtime_error("libdeflate_alloc_compressor failed");
-  vector<uint8_t> b(libdeflate_deflate_compress_bound(c,a.size()));
-  size_t r=libdeflate_deflate_compress(c,a.data(),a.size(),b.data(),b.size());
+  vector<uint8_t> b(libdeflate_deflate_compress_bound(c,n));
+  size_t r=libdeflate_deflate_compress(c,a,n,b.data(),b.size());
   libdeflate_free_compressor(c);
   if(r==0)throw runtime_error("libdeflate compress failed");
   b.resize(r);return b;
@@ -41,32 +64,32 @@ static vector<uint8_t> deflate_raw(const vector<uint8_t>&a,int level,const vecto
 #endif
  z_stream z;memset(&z,0,sizeof(z));
  if(deflateInit2(&z,level,Z_DEFLATED,-15,8,Z_DEFAULT_STRATEGY)!=Z_OK)throw runtime_error("deflateInit2 failed");
- if(!dict.empty()&&deflateSetDictionary(&z,dict.data(),(uInt)dict.size())!=Z_OK){deflateEnd(&z);throw runtime_error("deflateSetDictionary failed");}
- uLongf cap=deflateBound(&z,a.size())+dict.size()+1024;
+ if(dn&&deflateSetDictionary(&z,d,(uInt)dn)!=Z_OK){deflateEnd(&z);throw runtime_error("deflateSetDictionary failed");}
+ uLongf cap=deflateBound(&z,n)+dn+1024;
  vector<uint8_t> b(cap);
- z.next_in=(Bytef*)a.data();z.avail_in=(uInt)a.size();
+ z.next_in=(Bytef*)a;z.avail_in=(uInt)n;
  z.next_out=(Bytef*)b.data();z.avail_out=(uInt)cap;
  int r=deflate(&z,Z_FINISH);
  while(r==Z_OK)r=deflate(&z,Z_FINISH);
  if(r!=Z_STREAM_END){deflateEnd(&z);throw runtime_error("deflate failed");}
  b.resize(cap-z.avail_out);deflateEnd(&z);return b;
 }
-static void inflate_raw(const vector<uint8_t>&q,vector<uint8_t>&v,const vector<uint8_t>&dict){
+static void inflate_raw(const uint8_t*q,size_t qn,vector<uint8_t>&v,const uint8_t*d,size_t dn){
 #ifdef HAVE_LIBDEFLATE
- if(dict.empty()){
-  struct libdeflate_decompressor*d=libdeflate_alloc_decompressor();
-  if(!d)throw runtime_error("libdeflate_alloc_decompressor failed");
+ if(!dn){
+  struct libdeflate_decompressor*d2=libdeflate_alloc_decompressor();
+  if(!d2)throw runtime_error("libdeflate_alloc_decompressor failed");
   size_t actual=0;
-  enum libdeflate_result r=libdeflate_deflate_decompress(d,q.data(),q.size(),v.data(),v.size(),&actual);
-  libdeflate_free_decompressor(d);
+  enum libdeflate_result r=libdeflate_deflate_decompress(d2,q,qn,v.data(),v.size(),&actual);
+  libdeflate_free_decompressor(d2);
   if(r!=LIBDEFLATE_SUCCESS||actual!=v.size())throw runtime_error("inflate failed");
   return;
  }
 #endif
  z_stream z;memset(&z,0,sizeof(z));
  if(inflateInit2(&z,-15)!=Z_OK)throw runtime_error("inflateInit2 failed");
- if(!dict.empty()&&inflateSetDictionary(&z,dict.data(),(uInt)dict.size())!=Z_OK){inflateEnd(&z);throw runtime_error("inflateSetDictionary failed");}
- z.next_in=(Bytef*)q.data();z.avail_in=(uInt)q.size();
+ if(dn&&inflateSetDictionary(&z,d,(uInt)dn)!=Z_OK){inflateEnd(&z);throw runtime_error("inflateSetDictionary failed");}
+ z.next_in=(Bytef*)q;z.avail_in=(uInt)qn;
  z.next_out=(Bytef*)v.data();z.avail_out=(uInt)v.size();
  int r=inflate(&z,Z_FINISH);
  if(r!=Z_STREAM_END||z.total_out!=v.size()){inflateEnd(&z);throw runtime_error("inflate failed");}
@@ -74,14 +97,14 @@ static void inflate_raw(const vector<uint8_t>&q,vector<uint8_t>&v,const vector<u
 }
 static void varint(vector<uint8_t>&o,uint32_t v){while(v>=128){o.push_back(uint8_t(v)|128);v>>=7;}o.push_back(uint8_t(v));}
 static uint32_t readvar(const vector<uint8_t>&x,size_t&p){uint32_t v=0;for(int s=0;s<=28;s+=7){if(p>=x.size())throw runtime_error("truncated varint");uint8_t b=x[p++];v|=uint32_t(b&127)<<s;if(!(b&128))return v;}throw runtime_error("varint overflow");}
-static uint32_t hash3(const vector<uint8_t>&a,size_t i){return ((uint32_t(a[i])*251u+uint32_t(a[i+1]))*251u+uint32_t(a[i+2]))&65535u;}
+static uint32_t hash3(const uint8_t*a,size_t i){return ((uint32_t(a[i])*251u+uint32_t(a[i+1]))*251u+uint32_t(a[i+2]))&65535u;}
 // Repetition prefilter: sparse 3-gram sample every 8 bytes (stride 8 also aligns with
 // periods that are multiples of 8, e.g. a 45000-byte period), 22-bit fingerprint table
 // keeps random-data false positives near 1.5% for a 7% threshold.
-static bool likely_repetitive(const vector<uint8_t>&a){
- if(a.size()<96)return false;
+static bool likely_repetitive(const uint8_t*a,size_t n){
+ if(n<96)return false;
  vector<uint8_t> seen(1u<<22,0);size_t samples=0,repeats=0;
- for(size_t i=0;i+2<a.size();i+=8){uint32_t h=((uint32_t(a[i])*251u+uint32_t(a[i+1]))*251u+uint32_t(a[i+2]))&((1u<<22)-1);samples++;if(seen[h])repeats++;else seen[h]=1;}
+ for(size_t i=0;i+2<n;i+=8){uint32_t h=((uint32_t(a[i])*251u+uint32_t(a[i+1]))*251u+uint32_t(a[i+2]))&((1u<<22)-1);samples++;if(seen[h])repeats++;else seen[h]=1;}
  return samples && repeats*100>=samples*7;
 }
 // Greedy LZ77 with lazy matching, hash chains (depth most-recent candidates) and a
@@ -97,17 +120,17 @@ static bool likely_repetitive(const vector<uint8_t>&a){
 // so a match distance may reach past the block start into the dictionary (decoder side
 // resolves it identically). Distances are the same in both spaces; d > position means
 // a dictionary reference. Hash chains are pre-seeded with all dictionary positions.
-static vector<uint8_t> tokenize(const vector<uint8_t>&a,size_t window,int depth,const vector<uint8_t>&dict){
- size_t ds=dict.size(),n=a.size();
- vector<uint8_t> V;V.reserve(ds+n);V.insert(V.end(),dict.begin(),dict.end());V.insert(V.end(),a.begin(),a.end());
+static vector<uint8_t> tokenize(const uint8_t*a,size_t n,size_t window,int depth,const uint8_t*dict,size_t dsize){
+ size_t ds=dsize;
+ vector<uint8_t> V;V.reserve(ds+n);V.insert(V.end(),dict,dict+ds);V.insert(V.end(),a,a+n);
  vector<uint8_t> t;t.reserve(n);
  vector<int32_t> head(65536,-1),prev(ds+n,-1);
  uint32_t rep[4]={1,4,8,16};
- auto insert=[&](size_t k){uint32_t h=hash3(V,k);prev[k]=head[h];head[h]=int32_t(k);};
+ auto insert=[&](size_t k){uint32_t h=hash3(V.data(),k);prev[k]=head[h];head[h]=int32_t(k);};
  for(size_t k=0;k<ds;k++)insert(k);
  auto find_best=[&](size_t j,size_t&bdist){
   if(j+3>V.size())return size_t(0);
-  uint32_t h=hash3(V,j);int32_t q=head[h];size_t bl=0;bdist=0;
+  uint32_t h=hash3(V.data(),j);int32_t q=head[h];size_t bl=0;bdist=0;
   size_t nb=n-(j-ds); // matches never cross the block end
   for(int s=0;s<depth&&q>=0&&j-size_t(q)<=window;s++){
    size_t maxl=min<size_t>(4096,nb),l=0;
@@ -437,8 +460,7 @@ static void build_tabs(const vector<uint8_t>&tok,RansTab tabs[6]){
  const vector<uint8_t>*seqs[6]={&s.tags,&s.lits,&s.mlenc,&s.mdistc,&s.repv,&s.runv};
  for(int i=0;i<6;i++){uint32_t hist[256]={0};for(uint8_t b:*seqs[i])hist[b]++;tabs[i].build(hist,uint32_t(seqs[i]->size()));}
 }
-static vector<uint8_t> dp_tokenize(const vector<uint8_t>&a,size_t window,int depth,const RansTab*tabs){
- size_t n=a.size();
+static vector<uint8_t> dp_tokenize(const uint8_t*a,size_t n,size_t window,int depth,const RansTab*tabs){
  auto cost=[&](const RansTab&t,uint32_t sym)->double{uint32_t f=t.freq[sym&255];return f?-log2(double(f)/double(RSCALE)):12.0;};
  auto vcost=[&](const RansTab&t,uint32_t v)->double{double c=0;while(v>=128){c+=cost(t,uint8_t((v&127)|128));v>>=7;}return c+cost(t,uint8_t(v));};
  auto cost_len=[&](uint32_t L)->double{uint32_t v=L-4;if(v<64)return cost(tabs[2],v);int bl=32-__builtin_clz(v);return cost(tabs[2],58+bl)+double(bl-1);};
@@ -506,7 +528,7 @@ static vector<uint8_t> dp_tokenize(const vector<uint8_t>&a,size_t window,int dep
  for(size_t k=path.size();k-->0;){
   DpChoice c=path[k];
   if(c.kind==0){t.push_back(0);t.push_back(uint8_t(c.a));pos++;}
-  else if(c.kind==2){t.push_back(2);varint(t,c.a);t.insert(t.end(),a.begin()+pos,a.begin()+pos+c.a);pos+=c.a;}
+  else if(c.kind==2){t.push_back(2);varint(t,c.a);t.insert(t.end(),a+pos,a+pos+c.a);pos+=c.a;}
   else if(c.kind==1){if(c.b==0||c.b>pos||pos+c.a>n)throw runtime_error("dp internal error");t.push_back(1);varint(t,c.a);varint(t,c.b);for(int q=3;q>0;q--)rep[q]=rep[q-1];rep[0]=c.b;pos+=c.a;}
   else{if(c.b>3||pos+c.a>n)throw runtime_error("dp internal error");uint32_t d=rep[c.b];if(d==0||d>pos)throw runtime_error("dp internal error");t.push_back(3);varint(t,(c.a-4)*4+c.b);for(int q=int(c.b);q>0;q--)rep[q]=rep[q-1];rep[0]=d;pos+=c.a;}
  }
@@ -602,20 +624,23 @@ static vector<uint8_t> train_dictionary(const vector<string>&paths,uint32_t budg
 // greedy stream; mode 2 candidates keep the greedy stream; raw-tail dictionary depends
 // only on the input; the optimistic token-stream dictionary candidate is validated in the
 // serial phase 3 against the previous block's actual winner). Output is identical for any
-// thread count. force_mode (1..3, 0 = off) picks its candidate unconditionally when
-// feasible, for tests.
-static vector<uint8_t> encode(const vector<uint8_t>&in,int level,size_t bs,size_t window,int depth,int threads,int force_mode,const vector<uint8_t>&dict,bool embed){
+// thread count. Since v14 the input is a read-only mapping and blocks are pointer views
+// into it (no whole-file heap copy, no per-block copies); the archive bytes for decode
+// come from a mapping as well, and decoded blocks are written straight into a shared
+// mapping of the output file. force_mode (1..3, 0 = off) picks its candidate
+// unconditionally when feasible, for tests.
+static vector<uint8_t> encode(const uint8_t*in,size_t insz,int level,size_t bs,size_t window,int depth,int threads,int force_mode,const vector<uint8_t>&dict,bool embed){
  if(level<1||level>9||bs<4096||bs>4*1024*1024||window<4096||window>4*1024*1024||depth<1||depth>1024)throw runtime_error("invalid level/block/window/depth size");
  if(force_mode<0||force_mode>3)throw runtime_error("invalid force_mode");
  if(dict.size()>(1u<<20))throw runtime_error("dictionary too large (max 1 MiB)");
  if(threads<=0)threads=int(thread::hardware_concurrency());
  if(threads<1)threads=1;
  if(threads>64)threads=64;
- size_t nb=(in.size()+bs-1)/bs;
+ size_t nb=(insz+bs-1)/bs;
  const bool dp_on=(level==9&&depth>=2);
  uint8_t hf=0;
  if(!dict.empty())hf=embed?2:1;
- vector<uint8_t> o={'S','T','N','1','3',1,hf,0,0};put64(o,in.size());put32(o,uint32_t(nb));
+ vector<uint8_t> o={'S','T','N','1','3',1,hf,0,0};put64(o,insz);put32(o,uint32_t(nb));
  if(!dict.empty()&&embed){put32(o,uint32_t(dict.size()));o.insert(o.end(),dict.begin(),dict.end());}
  vector<vector<uint8_t>> tok(nb);
  auto phase=[&](auto&&fn){
@@ -624,23 +649,23 @@ static vector<uint8_t> encode(const vector<uint8_t>&in,int level,size_t bs,size_
   for(int t=0;t<threads;t++)ts.emplace_back([&fn,nb,threads,t]{for(size_t b=size_t(t);b<nb;b+=size_t(threads))fn(b);});
   for(auto&x:ts)x.join();
  };
- phase([&](size_t b){size_t off=b*bs,n=min(bs,in.size()-off);vector<uint8_t> a(in.begin()+off,in.begin()+off+n);if(likely_repetitive(a)||!dict.empty())tok[b]=tokenize(a,window,depth,dict);});
+ // blocks are read-only views into the (mapped) input; no per-block copies
+ phase([&](size_t b){size_t off=b*bs,n=min(bs,insz-off);if(likely_repetitive(in+off,n)||!dict.empty())tok[b]=tokenize(in+off,n,window,depth,dict.data(),dict.size());});
  vector<vector<uint8_t>> z1v(nb),zdv(nb),zd2v(nb),ztv(nb),ztdv(nb),zrv(nb);vector<uint32_t> sum(nb,0),rn(nb,0),tc(nb,0);
  phase([&](size_t b){
-  size_t off=b*bs,n=min(bs,in.size()-off);vector<uint8_t> a(in.begin()+off,in.begin()+off+n);
-  auto z1=deflate_raw(a,level,{});rn[b]=uint32_t(n);sum[b]=crc(a.data(),a.size());
+  size_t off=b*bs,n=min(bs,insz-off);
+  const uint8_t*a=in+off;
+  auto z1=deflate_raw(a,n,level,nullptr,0);rn[b]=uint32_t(n);sum[b]=crc(a,n);
   if(z1.size()<n&&b>0){
-   size_t po=(b-1)*bs,pn=min(bs,in.size()-po),dn=min<size_t>(pn,32768);
-   vector<uint8_t> dict(in.begin()+po+pn-dn,in.begin()+po+pn);
-   zdv[b]=deflate_raw(a,level,dict);
+   size_t po=(b-1)*bs,pn=min(bs,insz-po),dn=min<size_t>(pn,32768);
+   zdv[b]=deflate_raw(a,n,level,in+po+pn-dn,dn);
   }
-  if(!dict.empty()&&z1.size()<n)zd2v[b]=deflate_raw(a,level,dict);
+  if(!dict.empty()&&z1.size()<n)zd2v[b]=deflate_raw(a,n,level,dict.data(),dict.size());
   if(!tok[b].empty()){
-   ztv[b]=deflate_raw(tok[b],level,{});
+   ztv[b]=deflate_raw(tok[b].data(),tok[b].size(),level,nullptr,0);
    if(b>0&&!tok[b-1].empty()){
     size_t tn=tok[b-1].size(),dn=min<size_t>(tn,32768);
-    vector<uint8_t> dict(tok[b-1].end()-dn,tok[b-1].end());
-    ztdv[b]=deflate_raw(tok[b],level,dict);
+    ztdv[b]=deflate_raw(tok[b].data(),tok[b].size(),level,tok[b-1].data()+tn-dn,dn);
    }
    // rANS candidate: worth trying on sizable blocks (fixed table overhead);
    // at max also a DP-parse stream — keep whichever payload is smaller
@@ -648,7 +673,7 @@ static vector<uint8_t> encode(const vector<uint8_t>&in,int level,size_t bs,size_
     vector<uint8_t> src;
     if(dp_on){
      RansTab tabs[6];build_tabs(tok[b],tabs);
-     src=dp_tokenize(a,window,depth,tabs);
+     src=dp_tokenize(a,n,window,depth,tabs);
      TokenStreams sd;split_tokens(src,sd);
      zrv[b]=rans_payload(sd);tc[b]=uint32_t(sd.tags.size());
      TokenStreams sg;split_tokens(tok[b],sg);
@@ -665,7 +690,7 @@ static vector<uint8_t> encode(const vector<uint8_t>&in,int level,size_t bs,size_
  vector<uint8_t> winm(nb,0);
  for(size_t b=0;b<nb;b++){
   size_t off=b*bs,n=rn[b];
-  vector<uint8_t> best(in.begin()+off,in.begin()+off+n);uint8_t m=0,fl=0;uint32_t tf=0;
+  vector<uint8_t> best(in+off,in+off+n);uint8_t m=0,fl=0;uint32_t tf=0;
   if(!z1v[b].empty()&&z1v[b].size()<best.size()){best=z1v[b];m=1;}
   if(!zdv[b].empty()&&zdv[b].size()<best.size()){best=zdv[b];m=1;fl=1;}
   if(!zd2v[b].empty()&&zd2v[b].size()<best.size()){best=zd2v[b];m=1;fl=2;}
@@ -683,67 +708,107 @@ static vector<uint8_t> encode(const vector<uint8_t>&in,int level,size_t bs,size_
  }
  return o;
 }
-static vector<uint8_t> decode(const vector<uint8_t>&x,const vector<uint8_t>&dict_cli){
- if(x.size()<21||memcmp(x.data(),"STN13",5))throw runtime_error("bad STN13 header");
+// Decode: archive bytes come from a read-only mapping (no heap copy of the archive);
+// decoded blocks go straight into a shared mapping of the output file (ftruncate to the
+// header's total, so the file is grown once and sparsely), keeping the heap peak at one
+// block. If the output cannot be mapped the decoded bytes accumulate in memory and are
+// written at the end (old behavior). On any failure the partial output file is removed.
+// Returns the decoded total size (for the stats line).
+static uint64_t decode_write(const uint8_t*x,size_t xsz,const vector<uint8_t>&dict_cli,const char*outpath){
+ if(xsz<21||memcmp(x,"STN13",5))throw runtime_error("bad STN13 header");
  size_t p=5;
  if(x[p++]!=1)throw runtime_error("unsupported version");
  uint8_t hf0=x[p++],hf1=x[p++],hf2=x[p++];
  if(hf1||hf2||(hf0&~3u))throw runtime_error("unsupported header flags");
  if((hf0&3u)==3u)throw runtime_error("unsupported header flags");
- uint64_t total=get64(x,p);uint32_t blocks=get32(x,p);
+ uint64_t total=get64p(x,p,xsz);uint32_t blocks=get32p(x,p,xsz);
  if(total>(1ull<<34)||blocks>10000000)throw runtime_error("container limits exceeded");
  vector<uint8_t> dict;
  if(hf0&2){
-  uint32_t ds=get32(x,p);
-  if(ds>(1u<<20)||p+ds>x.size())throw runtime_error("bad dictionary section");
-  dict.assign(x.begin()+p,x.begin()+p+ds);p+=ds;
+  uint32_t ds=get32p(x,p,xsz);
+  if(ds>(1u<<20)||p+ds>xsz)throw runtime_error("bad dictionary section");
+  dict.assign(x+p,x+p+ds);p+=ds;
  }else if(hf0&1){
   if(dict_cli.empty())throw runtime_error("archive needs its trained dictionary (pass dict=path)");
   dict=dict_cli;
  }
- vector<uint8_t> out;out.reserve(size_t(total));
- vector<uint8_t> rawdict,tokdict;
- for(uint32_t b=0;b<blocks;b++){
-  if(p>=x.size())throw runtime_error("truncated block");
-  uint8_t mode=x[p++],flags=x[p++];
-  if(mode==0){if(flags)throw runtime_error("unknown block flags");}
-  else if(mode==1){if((flags&~3u)||flags==3)throw runtime_error("unknown block flags");}
-  else if(mode==2){if(flags&~2u)throw runtime_error("unknown block flags");}
-  else if(mode==3){if(flags)throw runtime_error("unknown block flags");}
-  else throw runtime_error("unknown mode");
-  uint32_t n=get32(x,p),sz=get32(x,p),transformed=get32(x,p),sum=get32(x,p);
-  if(n>4*1024*1024||sz>x.size()-p||out.size()+n>total)throw runtime_error("invalid block bounds");
-  vector<uint8_t> q(x.begin()+p,x.begin()+p+sz);p+=sz;
-  vector<uint8_t> v;
-  if(mode==0){if(sz!=n)throw runtime_error("raw block size mismatch");v=move(q);rawdict.clear();tokdict.clear();}
-  else if(mode==1){
-   v.resize(n);inflate_raw(q,v,flags&1?rawdict:flags&2?dict:vector<uint8_t>());
-   rawdict.clear();tokdict.clear();
-  }else if(mode==2){
-   if(transformed==0||transformed>8ull*n+1024)throw runtime_error("bad transformed size");
-   v.resize(transformed);inflate_raw(q,v,flags&2?tokdict:vector<uint8_t>());
-   vector<uint8_t> tokstream=move(v);
-   v=detokenize(tokstream,n,dict);
-   rawdict.clear();
-   tokdict=move(tokstream);
-  }else{
-   if(transformed==0||transformed>8ull*n+1024)throw runtime_error("bad transformed size");
-   v=rans_decode(q,n,transformed,dict);
-   rawdict.clear();tokdict.clear();
-  }
-  if(crc(v.data(),v.size())!=sum)throw runtime_error("CRC mismatch");
-  out.insert(out.end(),v.begin(),v.end());
-  size_t dn=min<size_t>(v.size(),32768);rawdict.assign(v.end()-dn,v.end());
+ int ofd=open(outpath,O_RDWR|O_CREAT|O_TRUNC,0644);
+ if(ofd<0)throw runtime_error("output open failed");
+ uint8_t*omap=nullptr;
+ vector<uint8_t> outbuf; // fallback when the output cannot be mapped
+ size_t woff=0;
+ if(total>0&&ftruncate(ofd,off_t(total))==0){
+  void*mp=mmap(nullptr,size_t(total),PROT_READ|PROT_WRITE,MAP_SHARED,ofd,0);
+  if(mp!=MAP_FAILED){omap=(uint8_t*)mp;}
  }
- if(p!=x.size()||out.size()!=total)throw runtime_error("container size/trailing bytes mismatch");
- return out;
+ vector<uint8_t> rawdict,tokdict;
+ try{
+  for(uint32_t b=0;b<blocks;b++){
+   if(p>=xsz)throw runtime_error("truncated block");
+   uint8_t mode=x[p++],flags=x[p++];
+   if(mode==0){if(flags)throw runtime_error("unknown block flags");}
+   else if(mode==1){if((flags&~3u)||flags==3)throw runtime_error("unknown block flags");}
+   else if(mode==2){if(flags&~2u)throw runtime_error("unknown block flags");}
+   else if(mode==3){if(flags)throw runtime_error("unknown block flags");}
+   else throw runtime_error("unknown mode");
+   uint32_t n=get32p(x,p,xsz),sz=get32p(x,p,xsz),transformed=get32p(x,p,xsz),sum=get32p(x,p,xsz);
+   if(n>4*1024*1024||sz>xsz-p||woff+n>total)throw runtime_error("invalid block bounds");
+   const uint8_t*pl=x+p;p+=sz; // payloads are inflated straight from the mapping
+   vector<uint8_t> v;
+   if(mode==0){if(sz!=n)throw runtime_error("raw block size mismatch");v.assign(pl,pl+n);rawdict.clear();tokdict.clear();}
+   else if(mode==1){
+    const uint8_t*pd=nullptr;size_t pdn=0;
+    if(flags&1){pd=rawdict.data();pdn=rawdict.size();}else if(flags&2){pd=dict.data();pdn=dict.size();}
+    v.resize(n);inflate_raw(pl,sz,v,pd,pdn);
+    rawdict.clear();tokdict.clear();
+   }else if(mode==2){
+    if(transformed==0||transformed>8ull*n+1024)throw runtime_error("bad transformed size");
+    v.resize(transformed);
+    const uint8_t*pd=nullptr;size_t pdn=0;
+    if(flags&2){pd=tokdict.data();pdn=tokdict.size();}
+    inflate_raw(pl,sz,v,pd,pdn);
+    vector<uint8_t> tokstream=move(v);
+    v=detokenize(tokstream,n,dict);
+    rawdict.clear();
+    tokdict=move(tokstream);
+   }else{
+    if(transformed==0||transformed>8ull*n+1024)throw runtime_error("bad transformed size");
+    v=rans_decode(vector<uint8_t>(pl,pl+sz),n,transformed,dict);
+    rawdict.clear();tokdict.clear();
+   }
+   if(crc(v.data(),v.size())!=sum)throw runtime_error("CRC mismatch");
+   if(omap)memcpy(omap+woff,v.data(),v.size());
+   else outbuf.insert(outbuf.end(),v.begin(),v.end());
+   woff+=v.size();
+   size_t dn=min<size_t>(v.size(),32768);rawdict.assign(v.end()-dn,v.end());
+  }
+  if(p!=xsz||woff!=total)throw runtime_error("container size/trailing bytes mismatch");
+ }catch(...){
+  if(omap)munmap(omap,size_t(total));
+  close(ofd);
+  ::unlink(outpath);
+  throw;
+ }
+ if(omap)munmap(omap,size_t(total));
+ else if(!outbuf.empty()){
+  size_t done=0;
+  while(done<outbuf.size()){
+   ssize_t w=::pwrite(ofd,outbuf.data()+done,outbuf.size()-done,off_t(done));
+   if(w<=0){close(ofd);::unlink(outpath);throw runtime_error("output write failed");}
+   done+=size_t(w);
+  }
+ }
+ close(ofd);
+ return total;
 }
 int main(int argc,char**argv){try{
- if(argc<4){cerr<<"usage: steno13 encode input output [level=6|fast|default|max] [block=1048576] [window=262144] [depth=1] [threads=0=auto] [force_mode=0] [dict=path] [embed=0|1]\n"
-                 "       steno13 decode input output [dict=path]\n"
-                 "       steno13 train output.dict input... [size=32768]   (inputs: files or directories)\n"
+ if(argc<4){cerr<<"usage: steno14 encode input output [level=6|fast|default|max] [block=1048576] [window=262144] [depth=1] [threads=0=auto] [force_mode=0] [dict=path] [embed=0|1]\n"
+                 "       steno14 decode input output [dict=path]\n"
+                 "       steno14 train output.dict input... [size=32768]   (inputs: files or directories)\n"
                  "dict: trained dictionary; encode stores it externally by default (embed=1 embeds it);\n"
-                 "      decode requires dict=path for external-dictionary archives\n";return 2;}
+                 "      decode requires dict=path for external-dictionary archives\n"
+                 "I/O: input files are mmapped; decode writes into a mmapped output file (since v14).\n"
+                 "Container format is unchanged (STN13).\n";return 2;}
  if(string(argv[1])=="train"){
   uint32_t budget=32768;vector<string> inputs;
   for(int i=3;i<argc;i++){string s=argv[i];if(s.rfind("size=",0)==0)budget=stoul(s.substr(5));else inputs.push_back(s);}
@@ -757,10 +822,11 @@ int main(int argc,char**argv){try{
   cerr<<"dictionary="<<dict.size()<<" bytes\n";
   return 0;
  }
- ifstream f(argv[2],ios::binary);if(!f)throw runtime_error("input open failed");
- vector<uint8_t>in((istreambuf_iterator<char>(f)),{});
- auto t=chrono::steady_clock::now();
  vector<uint8_t>out;
+ uint64_t dec_total=0;
+ size_t isz=0;
+ uint8_t*imp=map_file_ro(argv[2],isz);
+ auto t=chrono::steady_clock::now();
  if(string(argv[1])=="encode"){
   int level=6,depth=1;
   if(argc>4){string s=argv[4];if(s=="fast")level=2;else if(s=="max"){level=9;depth=16;}else if(s!="default")level=stoi(s);}
@@ -778,7 +844,7 @@ int main(int argc,char**argv){try{
    if(dict.size()>(1u<<20))throw runtime_error("dictionary too large (max 1 MiB)");
    if(argc>11)embed=string(argv[11])=="embed=1"||string(argv[11])=="1";
   }
-  out=encode(in,level,bs,win,depth,thr,force,dict,embed);
+  out=encode(imp,isz,level,bs,win,depth,thr,force,dict,embed);
  }else if(string(argv[1])=="decode"){
   vector<uint8_t> dict_cli;
   if(argc>4){
@@ -789,13 +855,16 @@ int main(int argc,char**argv){try{
    dict_cli.assign((istreambuf_iterator<char>(df)),{});
    if(dict_cli.size()>(1u<<20))throw runtime_error("dictionary too large (max 1 MiB)");
   }
-  out=decode(in,dict_cli);
+  dec_total=decode_write(imp,isz,dict_cli,argv[3]);
  }
- else throw runtime_error("unknown operation");
+ else{unmap_file(imp,isz);throw runtime_error("unknown operation");}
+ unmap_file(imp,isz);
  auto e=chrono::steady_clock::now();
- ofstream g(argv[3],ios::binary);g.write(reinterpret_cast<const char*>(out.data()),out.size());
- if(!g)throw runtime_error("output write failed");
+ if(string(argv[1])=="encode"){
+  ofstream g(argv[3],ios::binary);g.write(reinterpret_cast<const char*>(out.data()),out.size());
+  if(!g)throw runtime_error("output write failed");
+ }
  double sec=chrono::duration<double>(e-t).count();
- cerr<<"input="<<in.size()<<" output="<<out.size()<<" seconds="<<sec<<" MiB_s="<<(sec?in.size()/1048576.0/sec:0)<<"\n";
+ cerr<<"input="<<isz<<" output="<<(string(argv[1])=="encode"?out.size():size_t(dec_total))<<" seconds="<<sec<<" MiB_s="<<(sec?isz/1048576.0/sec:0)<<"\n";
  return 0;
 }catch(const exception&e){cerr<<"ERROR: "<<e.what()<<"\n";return 1;}}

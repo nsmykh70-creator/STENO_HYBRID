@@ -1,5 +1,5 @@
 import json, lzma, os, pathlib, random, statistics, subprocess, tempfile, time, zlib
-ROOT=pathlib.Path(__file__).resolve().parents[1]; EXE=ROOT/'steno13'; R=random.Random(20261124); N=1024*1024
+ROOT=pathlib.Path(__file__).resolve().parents[1]; EXE=ROOT/'steno14'; R=random.Random(20261124); N=1024*1024
 text=('Это тестовый многоязычный текст. The quick brown fox jumps over the lazy dog. 中文测试 日本語 テスト ภาษาไทย.\n'*12000).encode()[:N]
 jsondata=(b'{"id":123,"name":"example_user","active":true,"values":[1,2,3,4,5],"message":"hello world"}\n'*20000)[:N]
 base45k=bytes(((i*7+i//50)%251) for i in range(45000))

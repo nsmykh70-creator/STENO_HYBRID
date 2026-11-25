@@ -1,6 +1,19 @@
-# STENO HYBRID v13
+# STENO HYBRID v14
 
-Экспериментальный блочный lossless-кодек C++17. Формат STN13 (несовместим с STN9/STN10/STN11/STN12).
+Экспериментальный блочный lossless-кодек C++17. Формат STN13 (не менялся с v13; несовместим с STN9–STN12).
+
+## Что нового по сравнению с v13
+
+- mmap/потоковый I/O: входные файлы (энкод — исходник, декод — архив) мапируются
+  read-only (MADV_SEQUENTIAL) вместо копирования в heap-векторы; блоки энкодера —
+  read-only указательные срезы маппинга (без по-блочных копий); декод пишет
+  распакованные блоки прямо в MAP_SHARED-маппинг выходного файла (размер известен из
+  заголовка, файл растёт одним ftruncate). Приватная память (Private_Dirty) на
+  корпусе 64 МиБ: энкод 313 → 240 МиБ (−23%), декод 108 → 63 МиБ (−42%); maxRSS
+  347 → 324 и 110 → 107 МиБ (страницы маппингов остаются в RSS — это page cache,
+  а не heap). При ошибке декода частичный выходной файл удаляется.
+- Формат архива не изменился: архивы v14 байт-в-байт идентичны архивам v13
+  (проверяется тестом при наличии обоих бинарников).
 
 ## Что нового по сравнению с v12
 
@@ -64,22 +77,22 @@
 Требуются g++/clang++ с C++17 и zlib:
 
 ```bash
-g++ -O3 -DNDEBUG -std=c++17 -Wall -Wextra -pedantic native.cpp -lz -o steno13
+g++ -O3 -DNDEBUG -std=c++17 -Wall -Wextra -pedantic native.cpp -lz -o steno14
 # опционально, с libdeflate (быстрее; словарные блоки всё равно идут через zlib):
-g++ -O3 -DNDEBUG -DHAVE_LIBDEFLATE -std=c++17 -Wall -Wextra -pedantic native.cpp -ldeflate -lz -o steno13
+g++ -O3 -DNDEBUG -DHAVE_LIBDEFLATE -std=c++17 -Wall -Wextra -pedantic native.cpp -ldeflate -lz -o steno14
 ```
 
 ## Использование
 
 ```bash
-./steno13 encode input.bin output.stn [level=6|fast|default|max] [block=1048576] [window=262144] [depth=1] [threads=0] [dict=path] [embed=0|1]
-./steno13 decode output.stn restored.bin [dict=path]
-./steno13 train out.dict samples/ [size=32768]
+./steno14 encode input.bin output.stn [level=6|fast|default|max] [block=1048576] [window=262144] [depth=1] [threads=0] [dict=path] [embed=0|1]
+./steno14 decode output.stn restored.bin [dict=path]
+./steno14 train out.dict samples/ [size=32768]
 ```
 
 Уровень zlib: 1–9 или пресет fast/default/max. Размер блока: 4 КиБ–4 МиБ. Окно: 4 КиБ–4 МиБ.
 depth: 1–1024 (глубина цепочки кандидатов). threads: 0 = авто. Декодер определяет формат
-по сигнатуре STN13.
+по сигнатуре STN13 (I/O с v14 — mmap).
 
 ## Важные ограничения
 

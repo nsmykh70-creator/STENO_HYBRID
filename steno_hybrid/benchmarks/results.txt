@@ -2,11 +2,12 @@ STENO HYBRID v13 (STN13) benchmark; 1 MiB synthetic corpora; 5 repetitions; medi
 Times include process wall time for STENO and in-process codec calls for baselines.
 Corpora zeros..long_runs match the v8 protocol; period45k added in v9.
 
-zeros: sizes STENO=53 zlib=1039 LZMA3=284 bytes; STENO enc wall/kernel=0.023498/0.018113s, dec=0.004270/0.002469s; zlib enc/dec=0.004930/0.001861s; LZMA enc/dec=0.011530/0.001689s
-periodic: sizes STENO=84 zlib=2589 LZMA3=304 bytes; STENO enc wall/kernel=0.021009/0.016143s, dec=0.003011/0.001250s; zlib enc/dec=0.004937/0.000603s; LZMA enc/dec=0.011538/0.000470s
-multilingual: sizes STENO=223 zlib=4257 LZMA3=432 bytes; STENO enc wall/kernel=0.021158/0.016288s, dec=0.003061/0.001234s; zlib enc/dec=0.005095/0.000626s; LZMA enc/dec=0.011565/0.000318s
-random: sizes STENO=1048615 zlib=1048902 LZMA3=1048688 bytes; STENO enc wall/kernel=0.035865/0.030647s, dec=0.006427/0.000869s; zlib enc/dec=0.027508/0.000431s; LZMA enc/dec=0.140005/0.000261s
-json: sizes STENO=146 zlib=3666 LZMA3=372 bytes; STENO enc wall/kernel=0.020885/0.016084s, dec=0.002883/0.001216s; zlib enc/dec=0.004938/0.000613s; LZMA enc/dec=0.011526/0.000325s
-stride2: sizes STENO=324 zlib=4390 LZMA3=512 bytes; STENO enc wall/kernel=0.021002/0.016263s, dec=0.002895/0.001222s; zlib enc/dec=0.004980/0.000604s; LZMA enc/dec=0.011550/0.000318s
-long_runs: sizes STENO=65 zlib=1847 LZMA3=476 bytes; STENO enc wall/kernel=0.021030/0.016286s, dec=0.004153/0.002377s; zlib enc/dec=0.005479/0.001818s; LZMA enc/dec=0.011582/0.001700s
-period45k: sizes STENO=414 zlib=8692 LZMA3=868 bytes; STENO enc wall/kernel=0.021022/0.016360s, dec=0.002918/0.001240s; zlib enc/dec=0.005690/0.000639s; LZMA enc/dec=0.012476/0.000318s
+zeros: sizes STENO=53 zlib=1039 LZMA3=284 bytes; STENO enc wall/kernel=0.019646/0.018016s, dec=0.004761/0.003584s; zlib enc/dec=0.004921/0.003777s; LZMA enc/dec=0.011814/0.001759s
+periodic: sizes STENO=84 zlib=2589 LZMA3=304 bytes; STENO enc wall/kernel=0.017223/0.015749s, dec=0.004732/0.003544s; zlib enc/dec=0.004977/0.000645s; LZMA enc/dec=0.011912/0.000545s
+multilingual: sizes STENO=223 zlib=4257 LZMA3=432 bytes; STENO enc wall/kernel=0.017822/0.016241s, dec=0.004954/0.003712s; zlib enc/dec=0.004978/0.000652s; LZMA enc/dec=0.011653/0.000323s
+random: sizes STENO=1048615 zlib=1048902 LZMA3=1048688 bytes; STENO enc wall/kernel=0.033093/0.030993s, dec=0.003071/0.001763s; zlib enc/dec=0.027464/0.000448s; LZMA enc/dec=0.142002/0.000297s
+json: sizes STENO=146 zlib=3666 LZMA3=372 bytes; STENO enc wall/kernel=0.018174/0.016268s, dec=0.005144/0.003702s; zlib enc/dec=0.005056/0.000688s; LZMA enc/dec=0.012060/0.000392s
+stride2: sizes STENO=324 zlib=4390 LZMA3=512 bytes; STENO enc wall/kernel=0.017572/0.016096s, dec=0.006267/0.004366s; zlib enc/dec=0.005076/0.000667s; LZMA enc/dec=0.012076/0.000393s
+long_runs: sizes STENO=65 zlib=1847 LZMA3=476 bytes; STENO enc wall/kernel=0.018342/0.016675s, dec=0.005243/0.003840s; zlib enc/dec=0.005530/0.001889s; LZMA enc/dec=0.011928/0.001822s
+period45k: sizes STENO=414 zlib=8692 LZMA3=868 bytes; STENO enc wall/kernel=0.018589/0.016844s, dec=0.005080/0.003747s; zlib enc/dec=0.005875/0.000707s; LZMA enc/dec=0.012879/0.000382s
+
