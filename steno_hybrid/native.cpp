@@ -1087,8 +1087,11 @@ static vector<uint8_t> encode(const uint8_t*in,size_t insz,int level,size_t bs,s
   if(force_mode==2&&!ztv[b].empty()){best=ztv[b];m=2;fl=0;tf=uint32_t(tok[b].size());}
   if(force_mode==3&&!zrv[b].empty()&&tailv[b].empty()){best=zrv[b];m=3;fl=0;tf=tc[b];}
   if(force_mode==4&&!z4v[b].empty()&&tailv[b].empty()){best=z4v[b];m=4;fl=0;tf=tc4[b];}
-  if(force_mode==5&&!zrv[b].empty()){best=zrv[b];m=5;fl=0;tf=tc[b];}
-  if(force_mode==6&&!z4v[b].empty()){best=z4v[b];m=6;fl=0;tf=tc4[b];}
+  // forced modes still write the ACTUAL payload kind: a block without a tail prefix is
+  // a plain mode 3/4 block even under force_mode=5/6 (the decoder reads the tail size
+  // from the payload prefix, so the mode byte must match the payload's real shape)
+  if(force_mode==5&&!zrv[b].empty()){best=zrv[b];m=m3mode;fl=0;tf=tc[b];}
+  if(force_mode==6&&!z4v[b].empty()){best=z4v[b];m=m4mode;fl=0;tf=tc4[b];}
   winm[b]=m;
   o.push_back(m);o.push_back(fl);put32(o,rn[b]);put32(o,uint32_t(best.size()));put32(o,tf);put32(o,sum[b]);
   o.insert(o.end(),best.begin(),best.end());
