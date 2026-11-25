@@ -1,6 +1,19 @@
-# STENO HYBRID v10
+# STENO HYBRID v11
 
-Экспериментальный блочный lossless-кодек C++17. Формат STN10 (несовместим с STN9/STN8).
+Экспериментальный блочный lossless-кодек C++17. Формат STN11 (несовместим с STN9/STN10).
+
+## Что нового по сравнению с v10
+
+- Mode 3: token-поток разбивается на 8 классов (теги, литералы, коды/биты длин, коды/биты
+  дистанций, rep-коды, длины серий); классы кодируются rANS order-0 (12-бит вероятности,
+  слоты: малые значения напрямую, крупные — бакет + сырые extra-биты). На блоках с
+  разнообразными дистанциями mode 3 бьёт mode 2 на ~14%: walk_fine **16.95%** против 19.61%
+  в v10 (−13% к размеру архива). Энкодер выбирает минимум из mode 0/1/2/3 на блок —
+  регрессий нет. Цена: декод mode-3 блоков ~2× медленнее DEFLATE (однопоточный rANS);
+  interleaved rANS — будущая оптимизация.
+- Пресеты: `fast` (уровень 2), `default` (6), `max` (9 + depth 16).
+- Тесты: 13 roundtrip-корпусов + 11 корпусов с принудительным mode 3 (все блоки через rANS)
+  + 14 corruption-кейсов, на обеих сборках.
 
 ## Что нового по сравнению с v9
 
@@ -22,20 +35,21 @@
 Требуются g++/clang++ с C++17 и zlib:
 
 ```bash
-g++ -O3 -DNDEBUG -std=c++17 -Wall -Wextra -pedantic native.cpp -lz -o steno10
+g++ -O3 -DNDEBUG -std=c++17 -Wall -Wextra -pedantic native.cpp -lz -o steno11
 # опционально, с libdeflate (быстрее; словарные блоки всё равно идут через zlib):
-g++ -O3 -DNDEBUG -DHAVE_LIBDEFLATE -std=c++17 -Wall -Wextra -pedantic native.cpp -ldeflate -lz -o steno10
+g++ -O3 -DNDEBUG -DHAVE_LIBDEFLATE -std=c++17 -Wall -Wextra -pedantic native.cpp -ldeflate -lz -o steno11
 ```
 
 ## Использование
 
 ```bash
-./steno10 encode input.bin output.stn [level=6] [block=1048576] [window=262144] [depth=1] [threads=0]
-./steno10 decode output.stn restored.bin
+./steno11 encode input.bin output.stn [level=6|fast|default|max] [block=1048576] [window=262144] [depth=1] [threads=0]
+./steno11 decode output.stn restored.bin
 ```
 
-Уровень zlib: 1–9. Размер блока: 4 КиБ–4 МиБ. Окно: 4 КиБ–4 МиБ. depth: 1–1024 (глубина
-просмотра цепочки кандидатов). threads: 0 = авто. Декодер определяет формат по сигнатуре STN10.
+Уровень zlib: 1–9 или пресет fast/default/max. Размер блока: 4 КиБ–4 МиБ. Окно: 4 КиБ–4 МиБ.
+depth: 1–1024 (глубина цепочки кандидатов). threads: 0 = авто. Декодер определяет формат
+по сигнатуре STN11.
 
 ## Важные ограничения
 
@@ -44,4 +58,4 @@ g++ -O3 -DNDEBUG -DHAVE_LIBDEFLATE -std=c++17 -Wall -Wextra -pedantic native.cpp
 - Обработка файла целиком в памяти; потоковый ввод/вывод и mmap — волне 3.
 - Парсер жадный с ленивым сопоставлением; это не match finder уровня zstd/LZMA.
 - Результаты на синтетических корпусах по 1 МиБ не доказывают преимущество на произвольных файлах.
-- Форматы версионируются магией: STN10 не читается декодерами v8/v9.
+- Форматы версионируются магией: STN11 не читается декодерами v8/v9/v10.

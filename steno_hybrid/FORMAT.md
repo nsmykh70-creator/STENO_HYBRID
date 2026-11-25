@@ -1,10 +1,10 @@
-# STN10 container format (little-endian)
+# STN11 container format (little-endian)
 
 ## File header (21 bytes)
 
 | Field | Size | Meaning |
 |---|---:|---|
-| Magic | 5 | ASCII `STN10` |
+| Magic | 5 | ASCII `STN11` |
 | Version | 1 | `1` |
 | Flags | 3 | must be zero |
 | Original size | 8 | total uncompressed bytes |
@@ -14,11 +14,11 @@
 
 | Field | Size | Meaning |
 |---|---:|---|
-| Mode | 1 | 0 RAW, 1 raw-DEFLATE(block), 2 raw-DEFLATE(LZ77 tokens) |
+| Mode | 1 | 0 RAW, 1 raw-DEFLATE(block), 2 raw-DEFLATE(LZ77 tokens), 3 split streams + rANS |
 | Flags | 1 | mode 1: bit0 = dictionary from previous block's decoded tail; mode 2: bit1 = dictionary from previous block's token stream; other bits invalid |
 | Raw size | 4 | decoded bytes in this block |
 | Payload size | 4 | stored bytes |
-| Transformed size | 4 | decompressed token-stream size for mode 2; zero otherwise |
+| Transformed size | 4 | token-stream size (mode 2) or token count (mode 3); zero otherwise |
 | CRC32 | 4 | CRC of original block bytes |
 
 Payload follows immediately. DEFLATE here is **raw** DEFLATE (zlib windowBits = -15),
@@ -39,11 +39,26 @@ dictionary blocks are produced with zlib (`deflateSetDictionary` /
   A hash match pushes its distance into the cache (shift); a rep match moves the used
   entry to the front. Matches copy bytewise, overlapping references supported.
 
+## Mode 3: split token streams + rANS order-0
+
+The token stream is split into 8 per-class streams (stored in this order):
+0 tags, 1 literal bytes, 2 length codes, 3 length extra bits (raw),
+4 distance codes, 5 distance extra bits (raw), 6 rep varint bytes, 7 run-length varint bytes.
+Payload = 8 x u32 blob lengths, then blobs. A rANS blob = [u16 alphabet][u16 freqs][bytes];
+raw blobs are bit-packed MSB-first extra bits. Six streams are entropy-coded with a 32-bit
+rANS (12-bit probabilities, tables normalized to 4096); the encoder pushes symbols in
+reverse order, the decoder reads renormalization bytes backward and the final state from
+the last 4 bytes (big-endian). Length codes: v = length-4 < 64 direct, else bit-length
+bucket (code 58 + bit-length, extra bits = low bits). Distance codes: e = distance-1 < 32
+direct, else code 26 + bit-length with extra bits. Transformed size = token count (each
+token consumes exactly one tag symbol). The per-block mode is chosen by the encoder;
+mode 3 wins on blocks with high-entropy length/distance distributions.
+
 ## Encoder mode selection
 
-Per block the encoder tries RAW, raw-DEFLATE(block), raw-DEFLATE(block+dict) and, if the
-sparse 3-gram repetition prefilter passes, raw-DEFLATE(tokens) and raw-DEFLATE(tokens+dict);
-the shortest payload wins (ties in favor of the earlier candidate). The DEFLATE candidates
+Per block the encoder tries RAW, raw-DEFLATE(block), raw-DEFLATE(block+dict), and if the
+sparse 3-gram repetition prefilter passes, raw-DEFLATE(tokens), raw-DEFLATE(tokens+dict) and
+split-stream rANS (mode 3, blocks >= 16 KiB); the shortest payload wins (ties in favor of the earlier candidate). The DEFLATE candidates
 are computed in parallel over blocks; the token-dictionary candidate is validated against
 the previous block's actual winner. The file is rejected if block sizes do not sum to the
 declared original size or if trailing bytes remain.
