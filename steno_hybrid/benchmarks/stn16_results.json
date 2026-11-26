@@ -5,30 +5,51 @@
   "results": {
    "gzip-9": {
     "size": 12397750,
-    "enc_s": 8.99,
-    "dec_s": 0.348,
+    "enc_s": 10.352,
+    "dec_s": 0.411,
     "ok": true
    },
    "bzip2-9": {
-    "error": "bzip2: Can't open input file /tmp/bench16/fb2_45m.src: No such file or directory.\n"
+    "size": 7823742,
+    "enc_s": 4.896,
+    "dec_s": 2.617,
+    "ok": true
    },
    "xz-6": {
-    "error": "xz: /tmp/bench16/fb2_45m.src: No such file or directory\n"
+    "size": 7996760,
+    "enc_s": 24.41,
+    "dec_s": 0.244,
+    "ok": true
    },
    "xz-9e": {
-    "error": "xz: /tmp/bench16/fb2_45m.src: No such file or directory\n"
+    "size": 7572784,
+    "enc_s": 43.466,
+    "dec_s": 0.299,
+    "ok": true
    },
    "zstd-19": {
-    "error": "zstd: can't stat /tmp/bench16/fb2_45m.src : No such file or directory -- ignored \n"
+    "size": 7952485,
+    "enc_s": 26.522,
+    "dec_s": 0.078,
+    "ok": true
    },
    "steno-default": {
-    "error": "ERROR: input open failed\n"
+    "size": 12727625,
+    "enc_s": 4.063,
+    "dec_s": 0.17,
+    "ok": true
    },
    "steno-max": {
-    "error": "ERROR: input open failed\n"
+    "size": 11693217,
+    "enc_s": 58.797,
+    "dec_s": 1.04,
+    "ok": true
    },
    "steno-ultra": {
-    "error": "ERROR: input open failed\n"
+    "size": 9987055,
+    "enc_s": 347.755,
+    "dec_s": 0.964,
+    "ok": true
    }
   }
  },
@@ -38,30 +59,51 @@
   "results": {
    "gzip-9": {
     "size": 5514225,
-    "enc_s": 1.98,
-    "dec_s": 0.127,
+    "enc_s": 1.984,
+    "dec_s": 0.12,
     "ok": true
    },
    "bzip2-9": {
-    "error": "bzip2: Can't open input file /tmp/bench16/zstd_src.src: No such file or directory.\n"
+    "size": 4874857,
+    "enc_s": 1.358,
+    "dec_s": 0.666,
+    "ok": true
    },
    "xz-6": {
-    "error": "xz: /tmp/bench16/zstd_src.src: No such file or directory\n"
+    "size": 2375008,
+    "enc_s": 3.942,
+    "dec_s": 0.095,
+    "ok": true
    },
    "xz-9e": {
-    "error": "xz: /tmp/bench16/zstd_src.src: No such file or directory\n"
+    "size": 2348620,
+    "enc_s": 5.727,
+    "dec_s": 0.097,
+    "ok": true
    },
    "zstd-19": {
-    "error": "zstd: can't stat /tmp/bench16/zstd_src.src : No such file or directory -- ignored \n"
+    "size": 2456784,
+    "enc_s": 3.334,
+    "dec_s": 0.023,
+    "ok": true
    },
    "steno-default": {
-    "error": "ERROR: input open failed\n"
+    "size": 5419354,
+    "enc_s": 0.972,
+    "dec_s": 0.068,
+    "ok": true
    },
    "steno-max": {
-    "error": "ERROR: input open failed\n"
+    "size": 4670735,
+    "enc_s": 15.254,
+    "dec_s": 0.414,
+    "ok": true
    },
    "steno-ultra": {
-    "error": "ERROR: input open failed\n"
+    "size": 4139424,
+    "enc_s": 47.288,
+    "dec_s": 0.389,
+    "ok": true
    }
   }
  },
@@ -71,30 +113,51 @@
   "results": {
    "gzip-9": {
     "size": 4368218,
-    "enc_s": 1.612,
-    "dec_s": 0.079,
+    "enc_s": 1.59,
+    "dec_s": 0.092,
     "ok": true
    },
    "bzip2-9": {
-    "error": "bzip2: Can't open input file /tmp/bench16/walk_fine.src: No such file or directory.\n"
+    "size": 3476747,
+    "enc_s": 0.967,
+    "dec_s": 0.646,
+    "ok": true
    },
    "xz-6": {
-    "error": "xz: /tmp/bench16/walk_fine.src: No such file or directory\n"
+    "size": 3750040,
+    "enc_s": 6.872,
+    "dec_s": 0.157,
+    "ok": true
    },
    "xz-9e": {
-    "error": "xz: /tmp/bench16/walk_fine.src: No such file or directory\n"
+    "size": 3750632,
+    "enc_s": 5.99,
+    "dec_s": 0.151,
+    "ok": true
    },
    "zstd-19": {
-    "error": "zstd: can't stat /tmp/bench16/walk_fine.src : No such file or directory -- ignored \n"
+    "size": 3895461,
+    "enc_s": 5.443,
+    "dec_s": 0.022,
+    "ok": true
    },
    "steno-default": {
-    "error": "ERROR: input open failed\n"
+    "size": 4471537,
+    "enc_s": 0.687,
+    "dec_s": 0.045,
+    "ok": true
    },
    "steno-max": {
-    "error": "ERROR: input open failed\n"
+    "size": 4315642,
+    "enc_s": 10.224,
+    "dec_s": 0.355,
+    "ok": true
    },
    "steno-ultra": {
-    "error": "ERROR: input open failed\n"
+    "size": 4149711,
+    "enc_s": 42.226,
+    "dec_s": 0.349,
+    "ok": true
    }
   }
  },
@@ -104,30 +167,51 @@
   "results": {
    "gzip-9": {
     "size": 5436146,
-    "enc_s": 1.213,
-    "dec_s": 0.064,
+    "enc_s": 1.212,
+    "dec_s": 0.067,
     "ok": true
    },
    "bzip2-9": {
-    "error": "bzip2: Can't open input file /tmp/bench16/walk_coarse.src: No such file or directory.\n"
+    "size": 4594626,
+    "enc_s": 1.041,
+    "dec_s": 0.721,
+    "ok": true
    },
    "xz-6": {
-    "error": "xz: /tmp/bench16/walk_coarse.src: No such file or directory\n"
+    "size": 4900228,
+    "enc_s": 5.59,
+    "dec_s": 0.181,
+    "ok": true
    },
    "xz-9e": {
-    "error": "xz: /tmp/bench16/walk_coarse.src: No such file or directory\n"
+    "size": 4901160,
+    "enc_s": 5.764,
+    "dec_s": 0.184,
+    "ok": true
    },
    "zstd-19": {
-    "error": "zstd: can't stat /tmp/bench16/walk_coarse.src : No such file or directory -- ignored \n"
+    "size": 4921633,
+    "enc_s": 4.05,
+    "dec_s": 0.019,
+    "ok": true
    },
    "steno-default": {
-    "error": "ERROR: input open failed\n"
+    "size": 5554951,
+    "enc_s": 0.658,
+    "dec_s": 0.045,
+    "ok": true
    },
    "steno-max": {
-    "error": "ERROR: input open failed\n"
+    "size": 5350042,
+    "enc_s": 9.126,
+    "dec_s": 0.433,
+    "ok": true
    },
    "steno-ultra": {
-    "error": "ERROR: input open failed\n"
+    "size": 5199278,
+    "enc_s": 38.806,
+    "dec_s": 0.433,
+    "ok": true
    }
   }
  },
@@ -137,30 +221,51 @@
   "results": {
    "gzip-9": {
     "size": 9176797,
-    "enc_s": 0.317,
-    "dec_s": 0.083,
+    "enc_s": 0.321,
+    "dec_s": 0.087,
     "ok": true
    },
    "bzip2-9": {
-    "error": "bzip2: Can't open input file /tmp/bench16/period45k.src: No such file or directory.\n"
+    "size": 722003,
+    "enc_s": 3.699,
+    "dec_s": 0.427,
+    "ok": true
    },
    "xz-6": {
-    "error": "xz: /tmp/bench16/period45k.src: No such file or directory\n"
+    "size": 30692,
+    "enc_s": 0.365,
+    "dec_s": 0.017,
+    "ok": true
    },
    "xz-9e": {
-    "error": "xz: /tmp/bench16/period45k.src: No such file or directory\n"
+    "size": 30744,
+    "enc_s": 0.517,
+    "dec_s": 0.018,
+    "ok": true
    },
    "zstd-19": {
-    "error": "zstd: can't stat /tmp/bench16/period45k.src : No such file or directory -- ignored \n"
+    "size": 40287,
+    "enc_s": 0.024,
+    "dec_s": 0.007,
+    "ok": true
    },
    "steno-default": {
-    "error": "ERROR: input open failed\n"
+    "size": 61394,
+    "enc_s": 0.412,
+    "dec_s": 0.051,
+    "ok": true
    },
    "steno-max": {
-    "error": "ERROR: input open failed\n"
+    "size": 41898,
+    "enc_s": 0.886,
+    "dec_s": 0.055,
+    "ok": true
    },
    "steno-ultra": {
-    "error": "ERROR: input open failed\n"
+    "size": 41898,
+    "enc_s": 1.15,
+    "dec_s": 0.064,
+    "ok": true
    }
   }
  },
@@ -170,30 +275,51 @@
   "results": {
    "gzip-9": {
     "size": 4194974,
-    "enc_s": 0.116,
-    "dec_s": 0.021,
+    "enc_s": 0.118,
+    "dec_s": 0.023,
     "ok": true
    },
    "bzip2-9": {
-    "error": "bzip2: Can't open input file /tmp/bench16/rand_4m.src: No such file or directory.\n"
+    "size": 4213650,
+    "enc_s": 0.479,
+    "dec_s": 0.505,
+    "ok": true
    },
    "xz-6": {
-    "error": "xz: /tmp/bench16/rand_4m.src: No such file or directory\n"
+    "size": 4194584,
+    "enc_s": 0.856,
+    "dec_s": 0.011,
+    "ok": true
    },
    "xz-9e": {
-    "error": "xz: /tmp/bench16/rand_4m.src: No such file or directory\n"
+    "size": 4194584,
+    "enc_s": 0.937,
+    "dec_s": 0.008,
+    "ok": true
    },
    "zstd-19": {
-    "error": "zstd: can't stat /tmp/bench16/rand_4m.src : No such file or directory -- ignored \n"
+    "size": 4194413,
+    "enc_s": 0.346,
+    "dec_s": 0.009,
+    "ok": true
    },
    "steno-default": {
-    "error": "ERROR: input open failed\n"
+    "size": 4194397,
+    "enc_s": 0.04,
+    "dec_s": 0.007,
+    "ok": true
    },
    "steno-max": {
-    "error": "ERROR: input open failed\n"
+    "size": 4194397,
+    "enc_s": 0.042,
+    "dec_s": 0.006,
+    "ok": true
    },
    "steno-ultra": {
-    "error": "ERROR: input open failed\n"
+    "size": 4194397,
+    "enc_s": 0.041,
+    "dec_s": 0.006,
+    "ok": true
    }
   }
  }
