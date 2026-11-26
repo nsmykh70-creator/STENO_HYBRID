@@ -1360,7 +1360,9 @@ int main(int argc,char**argv){try{
  if(string(argv[1])=="encode"){
   int level=6,depth=1;bool ultra=false;
   if(argc>4){string s=argv[4];if(s=="fast")level=2;else if(s=="max"){level=9;depth=16;}else if(s=="ultra"){level=9;depth=128;ultra=true;}else if(s!="default")level=stoi(s);}
-  size_t bs=argc>5?stoull(argv[5]):1048576,win=argc>6?stoull(argv[6]):(ultra?1048576:262144);
+  // ultra: 4 MiB blocks + 4 MiB windows — cross-file repeats (tars, archives) need more
+  // history than 1 MiB blocks give; the sweep measured -32% on a source tar
+  size_t bs=argc>5?stoull(argv[5]):(ultra?4194304:1048576),win=argc>6?stoull(argv[6]):(ultra?4194304:262144);
   if(argc>7)depth=stoi(argv[7]);
   int thr=argc>8?stoi(argv[8]):0,force=argc>9?stoi(argv[9]):0;
   vector<uint8_t> dict;
@@ -1377,7 +1379,7 @@ int main(int argc,char**argv){try{
   out=encode(imp,isz,level,bs,win,depth,thr,force,dict,embed);
  }else if(string(argv[1])=="pack"){
   if(argc<4)throw runtime_error("pack requires inputs");
-  int level=6,depth=1,thr=0,force=0;size_t bs=1048576,win=262144;bool embed=false,ultra=false,wingiven=false;
+  int level=6,depth=1,thr=0,force=0;size_t bs=1048576,win=262144;bool embed=false,ultra=false,wingiven=false,blockgiven=false;
   vector<uint8_t> dict;vector<string> inputs;
   for(int i=3;i<argc;i++){
    string s=argv[i];
@@ -1387,12 +1389,11 @@ int main(int argc,char**argv){try{
    else if(s=="max"){level=9;depth=16;}
    else if(s=="ultra"){level=9;depth=128;ultra=true;}
    else if(s=="default"){}
-   else if(kw("block"))bs=stoull(s.substr(6));
+   else if(kw("block")){bs=stoull(s.substr(6));blockgiven=true;}
    else if(kw("window")){win=stoull(s.substr(7));wingiven=true;}
    else if(kw("depth"))depth=stoi(s.substr(6));
    else if(kw("threads"))thr=stoi(s.substr(8));
    else if(kw("force_mode"))force=stoi(s.substr(11));
-  if(ultra&&!wingiven)win=1048576;
    else if(kw("dict")){
     ifstream df(s.substr(5),ios::binary);
     if(!df)throw runtime_error("dictionary open failed");
@@ -1401,6 +1402,7 @@ int main(int argc,char**argv){try{
    }else if(kw("embed"))embed=s.substr(6)=="1";
    else inputs.push_back(s);
   }
+  if(ultra){if(!blockgiven)bs=4194304;if(!wingiven)win=4194304;}
   if(inputs.empty())throw runtime_error("pack: no input files");
   vector<pair<string,string>> entries; // (path on disk, stored archive path)
   for(const auto&inp:inputs){

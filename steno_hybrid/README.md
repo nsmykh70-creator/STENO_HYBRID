@@ -9,7 +9,8 @@
 - **Mode 4 — adaptive binary-tree rANS with contexts**: order-1 literal contexts, per-bit
   length/distance extra bits, 15-bit probabilities with LZMA-style counters, cross-block
   persistent model, 4-lane ILP, two-pass encoder. A per-block candidate; never hurts size.
-- **ultra preset**: level 9, depth 128, block/window 1 MiB + rolling tails.
+- **ultra preset**: level 9, depth 128, block/window 4 MiB + rolling tails (up to
+  8 MiB of history; -32% on a source tar vs 1 MiB blocks).
 - v16 test suite (59 checks) + v14/v15 suites stay green; archives with modes 4/5/6 need a
   v16+ decoder (modes 0-3 remain byte-identical with v13-v15).
 

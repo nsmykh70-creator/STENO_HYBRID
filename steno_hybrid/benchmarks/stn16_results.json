@@ -5,50 +5,50 @@
   "results": {
    "gzip-9": {
     "size": 12397750,
-    "enc_s": 10.352,
-    "dec_s": 0.411,
+    "enc_s": 9.034,
+    "dec_s": 0.344,
     "ok": true
    },
    "bzip2-9": {
     "size": 7823742,
-    "enc_s": 4.896,
-    "dec_s": 2.617,
+    "enc_s": 4.948,
+    "dec_s": 2.416,
     "ok": true
    },
    "xz-6": {
     "size": 7996760,
-    "enc_s": 24.41,
-    "dec_s": 0.244,
+    "enc_s": 22.387,
+    "dec_s": 0.221,
     "ok": true
    },
    "xz-9e": {
     "size": 7572784,
-    "enc_s": 43.466,
-    "dec_s": 0.299,
+    "enc_s": 40.534,
+    "dec_s": 0.331,
     "ok": true
    },
    "zstd-19": {
     "size": 7952485,
-    "enc_s": 26.522,
-    "dec_s": 0.078,
+    "enc_s": 26.341,
+    "dec_s": 0.101,
     "ok": true
    },
    "steno-default": {
     "size": 12727625,
-    "enc_s": 4.063,
-    "dec_s": 0.17,
+    "enc_s": 4.025,
+    "dec_s": 0.166,
     "ok": true
    },
    "steno-max": {
     "size": 11693217,
-    "enc_s": 58.797,
-    "dec_s": 1.04,
+    "enc_s": 58.555,
+    "dec_s": 1.058,
     "ok": true
    },
    "steno-ultra": {
-    "size": 9987055,
-    "enc_s": 347.755,
-    "dec_s": 0.964,
+    "size": 9877184,
+    "enc_s": 431.572,
+    "dec_s": 0.959,
     "ok": true
    }
   }
@@ -59,50 +59,50 @@
   "results": {
    "gzip-9": {
     "size": 5514225,
-    "enc_s": 1.984,
-    "dec_s": 0.12,
+    "enc_s": 1.996,
+    "dec_s": 0.125,
     "ok": true
    },
    "bzip2-9": {
     "size": 4874857,
-    "enc_s": 1.358,
-    "dec_s": 0.666,
+    "enc_s": 1.38,
+    "dec_s": 0.675,
     "ok": true
    },
    "xz-6": {
     "size": 2375008,
-    "enc_s": 3.942,
+    "enc_s": 4.028,
     "dec_s": 0.095,
     "ok": true
    },
    "xz-9e": {
     "size": 2348620,
-    "enc_s": 5.727,
-    "dec_s": 0.097,
+    "enc_s": 5.232,
+    "dec_s": 0.095,
     "ok": true
    },
    "zstd-19": {
     "size": 2456784,
-    "enc_s": 3.334,
-    "dec_s": 0.023,
+    "enc_s": 3.303,
+    "dec_s": 0.021,
     "ok": true
    },
    "steno-default": {
     "size": 5419354,
-    "enc_s": 0.972,
-    "dec_s": 0.068,
+    "enc_s": 0.997,
+    "dec_s": 0.069,
     "ok": true
    },
    "steno-max": {
     "size": 4670735,
-    "enc_s": 15.254,
+    "enc_s": 13.861,
     "dec_s": 0.414,
     "ok": true
    },
    "steno-ultra": {
-    "size": 4139424,
-    "enc_s": 47.288,
-    "dec_s": 0.389,
+    "size": 2826506,
+    "enc_s": 51.684,
+    "dec_s": 0.294,
     "ok": true
    }
   }
@@ -113,50 +113,50 @@
   "results": {
    "gzip-9": {
     "size": 4368218,
-    "enc_s": 1.59,
-    "dec_s": 0.092,
+    "enc_s": 1.602,
+    "dec_s": 0.084,
     "ok": true
    },
    "bzip2-9": {
     "size": 3476747,
-    "enc_s": 0.967,
-    "dec_s": 0.646,
+    "enc_s": 1.048,
+    "dec_s": 0.865,
     "ok": true
    },
    "xz-6": {
     "size": 3750040,
-    "enc_s": 6.872,
-    "dec_s": 0.157,
+    "enc_s": 6.228,
+    "dec_s": 0.15,
     "ok": true
    },
    "xz-9e": {
     "size": 3750632,
-    "enc_s": 5.99,
-    "dec_s": 0.151,
+    "enc_s": 6.126,
+    "dec_s": 0.154,
     "ok": true
    },
    "zstd-19": {
     "size": 3895461,
-    "enc_s": 5.443,
-    "dec_s": 0.022,
+    "enc_s": 4.593,
+    "dec_s": 0.02,
     "ok": true
    },
    "steno-default": {
     "size": 4471537,
-    "enc_s": 0.687,
-    "dec_s": 0.045,
+    "enc_s": 0.723,
+    "dec_s": 0.046,
     "ok": true
    },
    "steno-max": {
     "size": 4315642,
-    "enc_s": 10.224,
-    "dec_s": 0.355,
+    "enc_s": 10.284,
+    "dec_s": 0.373,
     "ok": true
    },
    "steno-ultra": {
-    "size": 4149711,
-    "enc_s": 42.226,
-    "dec_s": 0.349,
+    "size": 4127669,
+    "enc_s": 62.914,
+    "dec_s": 0.351,
     "ok": true
    }
   }
@@ -167,50 +167,50 @@
   "results": {
    "gzip-9": {
     "size": 5436146,
-    "enc_s": 1.212,
+    "enc_s": 1.226,
     "dec_s": 0.067,
     "ok": true
    },
    "bzip2-9": {
     "size": 4594626,
-    "enc_s": 1.041,
-    "dec_s": 0.721,
+    "enc_s": 1.006,
+    "dec_s": 0.754,
     "ok": true
    },
    "xz-6": {
     "size": 4900228,
-    "enc_s": 5.59,
-    "dec_s": 0.181,
+    "enc_s": 5.463,
+    "dec_s": 0.184,
     "ok": true
    },
    "xz-9e": {
     "size": 4901160,
-    "enc_s": 5.764,
-    "dec_s": 0.184,
+    "enc_s": 5.429,
+    "dec_s": 0.179,
     "ok": true
    },
    "zstd-19": {
     "size": 4921633,
-    "enc_s": 4.05,
+    "enc_s": 4.346,
     "dec_s": 0.019,
     "ok": true
    },
    "steno-default": {
     "size": 5554951,
-    "enc_s": 0.658,
-    "dec_s": 0.045,
+    "enc_s": 0.671,
+    "dec_s": 0.057,
     "ok": true
    },
    "steno-max": {
     "size": 5350042,
-    "enc_s": 9.126,
-    "dec_s": 0.433,
+    "enc_s": 9.208,
+    "dec_s": 0.437,
     "ok": true
    },
    "steno-ultra": {
-    "size": 5199278,
-    "enc_s": 38.806,
-    "dec_s": 0.433,
+    "size": 5170225,
+    "enc_s": 60.188,
+    "dec_s": 0.449,
     "ok": true
    }
   }
@@ -221,49 +221,49 @@
   "results": {
    "gzip-9": {
     "size": 9176797,
-    "enc_s": 0.321,
-    "dec_s": 0.087,
+    "enc_s": 0.326,
+    "dec_s": 0.083,
     "ok": true
    },
    "bzip2-9": {
     "size": 722003,
-    "enc_s": 3.699,
-    "dec_s": 0.427,
+    "enc_s": 3.454,
+    "dec_s": 0.353,
     "ok": true
    },
    "xz-6": {
     "size": 30692,
-    "enc_s": 0.365,
+    "enc_s": 0.375,
     "dec_s": 0.017,
     "ok": true
    },
    "xz-9e": {
     "size": 30744,
-    "enc_s": 0.517,
-    "dec_s": 0.018,
+    "enc_s": 0.608,
+    "dec_s": 0.017,
     "ok": true
    },
    "zstd-19": {
     "size": 40287,
-    "enc_s": 0.024,
-    "dec_s": 0.007,
+    "enc_s": 0.026,
+    "dec_s": 0.008,
     "ok": true
    },
    "steno-default": {
     "size": 61394,
-    "enc_s": 0.412,
+    "enc_s": 0.418,
     "dec_s": 0.051,
     "ok": true
    },
    "steno-max": {
     "size": 41898,
-    "enc_s": 0.886,
-    "dec_s": 0.055,
+    "enc_s": 0.961,
+    "dec_s": 0.072,
     "ok": true
    },
    "steno-ultra": {
-    "size": 41898,
-    "enc_s": 1.15,
+    "size": 39588,
+    "enc_s": 1.536,
     "dec_s": 0.064,
     "ok": true
    }
@@ -281,31 +281,31 @@
    },
    "bzip2-9": {
     "size": 4213650,
-    "enc_s": 0.479,
-    "dec_s": 0.505,
+    "enc_s": 0.485,
+    "dec_s": 0.461,
     "ok": true
    },
    "xz-6": {
     "size": 4194584,
-    "enc_s": 0.856,
-    "dec_s": 0.011,
+    "enc_s": 1.052,
+    "dec_s": 0.008,
     "ok": true
    },
    "xz-9e": {
     "size": 4194584,
-    "enc_s": 0.937,
-    "dec_s": 0.008,
+    "enc_s": 1.037,
+    "dec_s": 0.011,
     "ok": true
    },
    "zstd-19": {
     "size": 4194413,
-    "enc_s": 0.346,
+    "enc_s": 0.395,
     "dec_s": 0.009,
     "ok": true
    },
    "steno-default": {
     "size": 4194397,
-    "enc_s": 0.04,
+    "enc_s": 0.041,
     "dec_s": 0.007,
     "ok": true
    },
@@ -316,9 +316,9 @@
     "ok": true
    },
    "steno-ultra": {
-    "size": 4194397,
-    "enc_s": 0.041,
-    "dec_s": 0.006,
+    "size": 4194343,
+    "enc_s": 0.07,
+    "dec_s": 0.008,
     "ok": true
    }
   }
