@@ -57,15 +57,59 @@ direct, else code 26 + bit-length with extra bits. Transformed size = token coun
 token consumes exactly one tag symbol). The per-block mode is chosen by the encoder;
 mode 3 wins on blocks with high-entropy length/distance distributions.
 
+## Mode 4: adaptive binary-tree rANS with contexts (since v16)
+
+The entropy stage of mode 3 is replaced by adaptive binary-tree coding with contexts, and
+the length/distance extra bits (raw in mode 3) are context-coded too. Probabilities are
+15-bit P(bit==0) values, LZMA-style 5-bit counters, initialized to 0.5, and they PERSIST
+across the archive's blocks: the encoder emits the mode 4/6 candidates strictly in block
+order (serial phase inside the winner loop), and the decoder evolves its copy of the model
+on mode 4/6 blocks only — a non-mode-4 winner between two mode 4/6 blocks leaves both
+sides' states untouched, so they stay in sync. Payload: 8 x u32 blob lengths, 5 x u32
+symbol counts (lits, mlenc, mdistc, repv, runv; tag count = transformed), then blobs; a
+blob = [u32 x4 lane lengths][lane blobs] with NO stored tables (adaptive). Each lane is
+an independent backward binary rANS (32-bit state, renorm threshold 2^23, final state as
+4 BE bytes; the encoder is two-pass: model pass in decode order records (p,bit) per bit,
+coder pass feeds them to the lanes in reverse; lane = per-symbol index % 4 for tree
+streams, per-BIT index % 4 for the extra-bit streams). Contexts:
+  tags    2-bit tree, ctx = previous tag                    (4 ctx x 3 nodes)
+  lits    8-bit tree, ctx = previous OUTPUT byte (order-1)  (256 ctx x 255)
+  mlenc   8-bit length-slot tree, shared                    (255)
+  mlenb   per-bit, ctx = bucket(bl)<<4 | bit position       (24 ctx x 16)
+  mdistc  8-bit distance-slot tree, shared                  (255)
+  mdistb  per-bit, ctx = bucket(bl)<<4 | bit position       (24 ctx x 16)
+  repv    8-bit varint bytes, ctx = varint depth (0..7)     (8 ctx x 255)
+  runv    same as repv
+Slot codes and token assembly are identical to mode 3; transformed size = token count.
+At level >= 9 (or forced) the mode 4 candidate competes per block; for the DP-vs-greedy
+choice each variant is encoded against a snapshot of the model, and only the winner's
+post-state is adopted. Old binaries reject mode 4 blocks (unknown mode) — v16 archives
+are readable only by v16+ decoders.
+
+## Modes 5/6: rolling-tail cross-block matches (since v16)
+
+Modes 5 and 6 are modes 3 and 4 whose token stream may reference a ROLLING TAIL: the
+last W bytes of the previous block's output (W <= min(4 MiB, window), chosen by the
+encoder and stored as a u32 prefix of the payload; the rANS/mode 4 payload follows the
+prefix). The tokenizer's virtual buffer is tail||block, so a match distance may exceed
+the output-so-far and resolves against the tail — the same rule the trained dictionary
+uses. Distances are bounded by tail+position < 2^23, fitting the mode 3/4 distance
+slots. Modes 5/6 are invalid together with a trained dictionary (encode never emits
+them when dict is set; decode rejects such a combination).
+
 ## Encoder mode selection
 
 Per block the encoder tries RAW, raw-DEFLATE(block), raw-DEFLATE(block+dict), and if the
 sparse 3-gram repetition prefilter passes (skipped when a trained dictionary is present),
-raw-DEFLATE(tokens), raw-DEFLATE(tokens+dict) and split-stream rANS (mode 3, blocks >=
-16 KiB; at level 9 + depth >= 2 additionally the DP-parse stream, min of the two is kept;
-tokenizer distances may reference the trained dictionary); the shortest payload wins. (ties in favor of the earlier candidate). The DEFLATE candidates
-are computed in parallel over blocks; the token-dictionary candidate is validated against
-the previous block's actual winner. The file is rejected if block sizes do not sum to the
+raw-DEFLATE(tokens) (only for tail-less blocks), raw-DEFLATE(tokens+dict) and
+split-stream rANS (mode 3; with a rolling tail the same payload is emitted as mode 5;
+blocks >= 16 KiB; at level 9 + depth >= 2 additionally the DP-parse stream — which may
+itself reference the tail — min of the two is kept). At level >= 9 additionally the
+adaptive mode 4 (mode 6 with a tail) candidate is encoded in block order against the
+persistent model state. The shortest payload wins (ties in favor of the earlier
+candidate); the mode 4 candidate's model post-state is adopted only when it wins. The
+DEFLATE candidates are computed in parallel over blocks; the token-dictionary candidate
+is validated against the previous block's actual winner. The file is rejected if block sizes do not sum to the
 declared original size or if trailing bytes remain.
 
 ## STN15 multi-file container (since v15)

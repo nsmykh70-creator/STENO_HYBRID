@@ -1,6 +1,18 @@
-# STENO_HYBRID
+## What's new in v16
 
-An experimental lossless block compressor written in C++17. Single-threaded archives use the
+- **hash4 match finder** (18-bit buckets, 4-byte rolling key) in both the greedy tokenizer
+  and the DP parser; DP length cap 256 -> 4096. fb2 45.3 MiB: max preset 12.39 -> 10.66 MiB.
+- **Modes 5/6 — rolling-tail cross-block matches**: a block's token stream may reference the
+  last W bytes (<= 4 MiB, stored as a u32 payload prefix) of the previous block's output;
+  distances resolve against tail||output exactly like a trained dictionary. fb2: 10.43 MiB
+  (depth 64), 9.64 MiB (ultra d256) — from 12.39 MiB in v15.
+- **Mode 4 — adaptive binary-tree rANS with contexts**: order-1 literal contexts, per-bit
+  length/distance extra bits, 15-bit probabilities with LZMA-style counters, cross-block
+  persistent model, 4-lane ILP, two-pass encoder. A per-block candidate; never hurts size.
+- **ultra preset**: level 9, depth 128, block/window 1 MiB + rolling tails.
+- v16 test suite (59 checks) + v14/v15 suites stay green; archives with modes 4/5/6 need a
+  v16+ decoder (modes 0-3 remain byte-identical with v13-v15).
+
 STN13 format; multi-file archives (`pack`/`unpack`) use STN15 (since v15). The core also
 compiles unchanged to **Windows** (mingw + mmap shim), **Android/aarch64** (static) and
 **WebAssembly** — there is a single-file browser version, [try it on GitHub Pages](https://nsmykh70-creator.github.io/STENO_HYBRID/).

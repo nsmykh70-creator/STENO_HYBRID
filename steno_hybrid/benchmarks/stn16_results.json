@@ -1,0 +1,200 @@
+[
+ {
+  "file": "fb2_45m",
+  "raw": 47470221,
+  "results": {
+   "gzip-9": {
+    "size": 12397750,
+    "enc_s": 8.99,
+    "dec_s": 0.348,
+    "ok": true
+   },
+   "bzip2-9": {
+    "error": "bzip2: Can't open input file /tmp/bench16/fb2_45m.src: No such file or directory.\n"
+   },
+   "xz-6": {
+    "error": "xz: /tmp/bench16/fb2_45m.src: No such file or directory\n"
+   },
+   "xz-9e": {
+    "error": "xz: /tmp/bench16/fb2_45m.src: No such file or directory\n"
+   },
+   "zstd-19": {
+    "error": "zstd: can't stat /tmp/bench16/fb2_45m.src : No such file or directory -- ignored \n"
+   },
+   "steno-default": {
+    "error": "ERROR: input open failed\n"
+   },
+   "steno-max": {
+    "error": "ERROR: input open failed\n"
+   },
+   "steno-ultra": {
+    "error": "ERROR: input open failed\n"
+   }
+  }
+ },
+ {
+  "file": "zstd_src",
+  "raw": 16977920,
+  "results": {
+   "gzip-9": {
+    "size": 5514225,
+    "enc_s": 1.98,
+    "dec_s": 0.127,
+    "ok": true
+   },
+   "bzip2-9": {
+    "error": "bzip2: Can't open input file /tmp/bench16/zstd_src.src: No such file or directory.\n"
+   },
+   "xz-6": {
+    "error": "xz: /tmp/bench16/zstd_src.src: No such file or directory\n"
+   },
+   "xz-9e": {
+    "error": "xz: /tmp/bench16/zstd_src.src: No such file or directory\n"
+   },
+   "zstd-19": {
+    "error": "zstd: can't stat /tmp/bench16/zstd_src.src : No such file or directory -- ignored \n"
+   },
+   "steno-default": {
+    "error": "ERROR: input open failed\n"
+   },
+   "steno-max": {
+    "error": "ERROR: input open failed\n"
+   },
+   "steno-ultra": {
+    "error": "ERROR: input open failed\n"
+   }
+  }
+ },
+ {
+  "file": "walk_fine",
+  "raw": 10485760,
+  "results": {
+   "gzip-9": {
+    "size": 4368218,
+    "enc_s": 1.612,
+    "dec_s": 0.079,
+    "ok": true
+   },
+   "bzip2-9": {
+    "error": "bzip2: Can't open input file /tmp/bench16/walk_fine.src: No such file or directory.\n"
+   },
+   "xz-6": {
+    "error": "xz: /tmp/bench16/walk_fine.src: No such file or directory\n"
+   },
+   "xz-9e": {
+    "error": "xz: /tmp/bench16/walk_fine.src: No such file or directory\n"
+   },
+   "zstd-19": {
+    "error": "zstd: can't stat /tmp/bench16/walk_fine.src : No such file or directory -- ignored \n"
+   },
+   "steno-default": {
+    "error": "ERROR: input open failed\n"
+   },
+   "steno-max": {
+    "error": "ERROR: input open failed\n"
+   },
+   "steno-ultra": {
+    "error": "ERROR: input open failed\n"
+   }
+  }
+ },
+ {
+  "file": "walk_coarse",
+  "raw": 10485760,
+  "results": {
+   "gzip-9": {
+    "size": 5436146,
+    "enc_s": 1.213,
+    "dec_s": 0.064,
+    "ok": true
+   },
+   "bzip2-9": {
+    "error": "bzip2: Can't open input file /tmp/bench16/walk_coarse.src: No such file or directory.\n"
+   },
+   "xz-6": {
+    "error": "xz: /tmp/bench16/walk_coarse.src: No such file or directory\n"
+   },
+   "xz-9e": {
+    "error": "xz: /tmp/bench16/walk_coarse.src: No such file or directory\n"
+   },
+   "zstd-19": {
+    "error": "zstd: can't stat /tmp/bench16/walk_coarse.src : No such file or directory -- ignored \n"
+   },
+   "steno-default": {
+    "error": "ERROR: input open failed\n"
+   },
+   "steno-max": {
+    "error": "ERROR: input open failed\n"
+   },
+   "steno-ultra": {
+    "error": "ERROR: input open failed\n"
+   }
+  }
+ },
+ {
+  "file": "period45k",
+  "raw": 10485760,
+  "results": {
+   "gzip-9": {
+    "size": 9176797,
+    "enc_s": 0.317,
+    "dec_s": 0.083,
+    "ok": true
+   },
+   "bzip2-9": {
+    "error": "bzip2: Can't open input file /tmp/bench16/period45k.src: No such file or directory.\n"
+   },
+   "xz-6": {
+    "error": "xz: /tmp/bench16/period45k.src: No such file or directory\n"
+   },
+   "xz-9e": {
+    "error": "xz: /tmp/bench16/period45k.src: No such file or directory\n"
+   },
+   "zstd-19": {
+    "error": "zstd: can't stat /tmp/bench16/period45k.src : No such file or directory -- ignored \n"
+   },
+   "steno-default": {
+    "error": "ERROR: input open failed\n"
+   },
+   "steno-max": {
+    "error": "ERROR: input open failed\n"
+   },
+   "steno-ultra": {
+    "error": "ERROR: input open failed\n"
+   }
+  }
+ },
+ {
+  "file": "rand_4m",
+  "raw": 4194304,
+  "results": {
+   "gzip-9": {
+    "size": 4194974,
+    "enc_s": 0.116,
+    "dec_s": 0.021,
+    "ok": true
+   },
+   "bzip2-9": {
+    "error": "bzip2: Can't open input file /tmp/bench16/rand_4m.src: No such file or directory.\n"
+   },
+   "xz-6": {
+    "error": "xz: /tmp/bench16/rand_4m.src: No such file or directory\n"
+   },
+   "xz-9e": {
+    "error": "xz: /tmp/bench16/rand_4m.src: No such file or directory\n"
+   },
+   "zstd-19": {
+    "error": "zstd: can't stat /tmp/bench16/rand_4m.src : No such file or directory -- ignored \n"
+   },
+   "steno-default": {
+    "error": "ERROR: input open failed\n"
+   },
+   "steno-max": {
+    "error": "ERROR: input open failed\n"
+   },
+   "steno-ultra": {
+    "error": "ERROR: input open failed\n"
+   }
+  }
+ }
+]
