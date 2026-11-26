@@ -99,6 +99,14 @@ static void inflate_raw(const uint8_t*q,size_t qn,vector<uint8_t>&v,const uint8_
 static void varint(vector<uint8_t>&o,uint32_t v){while(v>=128){o.push_back(uint8_t(v)|128);v>>=7;}o.push_back(uint8_t(v));}
 static uint32_t readvar(const vector<uint8_t>&x,size_t&p){uint32_t v=0;for(int s=0;s<=28;s+=7){if(p>=x.size())throw runtime_error("truncated varint");uint8_t b=x[p++];v|=uint32_t(b&127)<<s;if(!(b&128))return v;}throw runtime_error("varint overflow");}
 static uint32_t hash3(const uint8_t*a,size_t i){return ((uint32_t(a[i])*251u+uint32_t(a[i+1]))*251u+uint32_t(a[i+2]))&65535u;}
+// 4-byte rolling key, 18-bit buckets: a 3-byte key collapses on text (common trigrams
+// flood one bucket and depth-limited chains miss the real candidates); 4 bytes keeps
+// the bucket population proportional to true 4-byte repeats. Requires i+4 bytes.
+static inline uint32_t hash4(const uint8_t*a,size_t i){
+ uint32_t v=uint32_t(a[i])|(uint32_t(a[i+1])<<8)|(uint32_t(a[i+2])<<16)|(uint32_t(a[i+3])<<24);
+ v*=2654435761u;v^=v>>15;
+ return (v*2246822519u)>>14;
+}
 // Repetition prefilter: sparse 3-gram sample every 8 bytes (stride 8 also aligns with
 // periods that are multiples of 8, e.g. a 45000-byte period), 22-bit fingerprint table
 // keeps random-data false positives near 1.5% for a 7% threshold.
@@ -125,13 +133,13 @@ static vector<uint8_t> tokenize(const uint8_t*a,size_t n,size_t window,int depth
  size_t ds=dsize;
  vector<uint8_t> V;V.reserve(ds+n);V.insert(V.end(),dict,dict+ds);V.insert(V.end(),a,a+n);
  vector<uint8_t> t;t.reserve(n);
- vector<int32_t> head(65536,-1),prev(ds+n,-1);
+ vector<int32_t> head(1<<18,-1),prev(ds+n,-1);
  uint32_t rep[4]={1,4,8,16};
- auto insert=[&](size_t k){uint32_t h=hash3(V.data(),k);prev[k]=head[h];head[h]=int32_t(k);};
+ auto insert=[&](size_t k){if(k+4>V.size())return;uint32_t h=hash4(V.data(),k);prev[k]=head[h];head[h]=int32_t(k);};
  for(size_t k=0;k<ds;k++)insert(k);
  auto find_best=[&](size_t j,size_t&bdist){
-  if(j+3>V.size())return size_t(0);
-  uint32_t h=hash3(V.data(),j);int32_t q=head[h];size_t bl=0;bdist=0;
+  if(j+4>V.size())return size_t(0);
+  uint32_t h=hash4(V.data(),j);int32_t q=head[h];size_t bl=0;bdist=0;
   size_t nb=n-(j-ds); // matches never cross the block end
   for(int s=0;s<depth&&q>=0&&j-size_t(q)<=window;s++){
    size_t maxl=min<size_t>(4096,nb),l=0;
@@ -770,19 +778,26 @@ static void build_tabs(const vector<uint8_t>&tok,RansTab tabs[6]){
  const vector<uint8_t>*seqs[6]={&s.tags,&s.lits,&s.mlenc,&s.mdistc,&s.repv,&s.runv};
  for(int i=0;i<6;i++){uint32_t hist[256]={0};for(uint8_t b:*seqs[i])hist[b]++;tabs[i].build(hist,uint32_t(seqs[i]->size()));}
 }
-static vector<uint8_t> dp_tokenize(const uint8_t*a,size_t n,size_t window,int depth,const RansTab*tabs){
+static vector<uint8_t> dp_tokenize(const uint8_t*a,size_t n,size_t window,int depth,const RansTab*tabs,const uint8_t*dict=nullptr,size_t dn=0){
  auto cost=[&](const RansTab&t,uint32_t sym)->double{uint32_t f=t.freq[sym&255];return f?-log2(double(f)/double(RSCALE)):12.0;};
  auto vcost=[&](const RansTab&t,uint32_t v)->double{double c=0;while(v>=128){c+=cost(t,uint8_t((v&127)|128));v>>=7;}return c+cost(t,uint8_t(v));};
  auto cost_len=[&](uint32_t L)->double{uint32_t v=L-4;if(v<64)return cost(tabs[2],v);int bl=32-__builtin_clz(v);return cost(tabs[2],58+bl)+double(bl-1);};
  auto cost_dist=[&](uint32_t d)->double{uint32_t e=d-1;if(e<32)return cost(tabs[3],e);int bl=32-__builtin_clz(e);return cost(tabs[3],26+bl)+double(bl-1);};
  auto shiftp=[&](const array<uint32_t,4>&r,uint32_t d,int idx){array<uint32_t,4> o=r;for(int k=idx;k>0;k--)o[k]=o[k-1];o[0]=d;return o;};
  const double INF=1e30;
+ // virtual buffer dict||block: chain positions are V indices, so a match/rep distance
+ // may reach into the prefix (rolling tail or trained dictionary) exactly like the
+ // greedy tokenizer; the decoder resolves d > position against the same prefix
+ size_t ds=dn;
+ vector<uint8_t> V;V.reserve(ds+n);V.insert(V.end(),dict,dict+ds);V.insert(V.end(),a,a+n);
  vector<double> C(n+1,INF);vector<DpChoice> CH(n+1);vector<array<uint32_t,4>> RS(n+1);
  vector<uint8_t> cover(n,0);
  C[0]=0;RS[0]={1,4,8,16};
- vector<int32_t> head(65536,-1),prev(n,-1);
- auto insert=[&](size_t k){uint32_t h=hash3(a,k);prev[k]=head[h];head[h]=int32_t(k);};
+ vector<int32_t> head(1<<18,-1),prev(ds+n,-1);
+ auto insert=[&](size_t k){if(k+4>V.size())return;uint32_t h=hash4(V.data(),k);prev[k]=head[h];head[h]=int32_t(k);};
+ for(size_t k=0;k<ds;k++)insert(k);
  for(size_t i=0;i<n;i++){
+  size_t j=ds+i;
   double ci=C[i];const array<uint32_t,4> rp=RS[i];
   {double c=ci+cost(tabs[0],0)+cost(tabs[1],a[i]);if(c<C[i+1]){C[i+1]=c;CH[i+1]={0,a[i],0};RS[i+1]=rp;}}
   if(!cover[i]){
@@ -791,12 +806,12 @@ static vector<uint8_t> dp_tokenize(const uint8_t*a,size_t n,size_t window,int de
     double c=ci+cost(tabs[0],2)+vcost(tabs[5],uint32_t(r))+double(r)*cost(tabs[1],a[i]);
     if(c<C[i+r]){C[i+r]=c;CH[i+r]={2,uint32_t(r),0};RS[i+r]=rp;}
    }
-   if(i+3<n){
-    uint32_t h=hash3(a,i);int32_t q=head[h];
+   if(i+4<=n){
+    uint32_t h=hash4(V.data(),j);int32_t q=head[h];
     size_t bl=0,bd=0;double be=INF;
-    for(int s=0;s<depth&&q>=0&&i-size_t(q)<=window;s++){
-     size_t d=i-size_t(q),maxl=min<size_t>(256,n-i),l=0;
-     while(l<maxl&&a[size_t(q)+l]==a[i+l])l++;
+    for(int s=0;s<depth&&q>=0&&j-size_t(q)<=window;s++){
+     size_t d=j-size_t(q),maxl=min<size_t>(4096,n-i),l=0;
+     while(l<maxl&&V[size_t(q)+l]==V[j+l])l++;
      if(l>=4){
       double e=cost(tabs[0],1)+cost_len(uint32_t(l))+cost_dist(uint32_t(d));
       if(ci+e<C[i+l]){C[i+l]=ci+e;CH[i+l]={1,uint32_t(l),uint32_t(d)};RS[i+l]=shiftp(rp,uint32_t(d),3);}
@@ -806,7 +821,7 @@ static vector<uint8_t> dp_tokenize(const uint8_t*a,size_t n,size_t window,int de
     }
     if(bl){
      size_t full=min<size_t>(4096,n-i);size_t l=0;
-     while(l<full&&a[i-bd+l]==a[i+l])l++;
+     while(l<full&&V[j-bd+l]==V[j+l])l++;
      if(l>=4){
       double e=cost(tabs[0],1)+cost_len(uint32_t(l))+cost_dist(uint32_t(bd));
       if(ci+e<C[i+l]){C[i+l]=ci+e;CH[i+l]={1,uint32_t(l),uint32_t(bd)};RS[i+l]=shiftp(rp,uint32_t(bd),3);}
@@ -819,9 +834,9 @@ static vector<uint8_t> dp_tokenize(const uint8_t*a,size_t n,size_t window,int de
      }
     }
     for(int idx=0;idx<4;idx++){
-     uint32_t d=rp[idx];if(d==0||d>i)continue;
+     uint32_t d=rp[idx];if(d==0||d>j)continue;
      size_t maxl=min<size_t>(256,n-i),l=0;
-     while(l<maxl&&a[i-d+l]==a[i+l])l++;
+     while(l<maxl&&V[j-d+l]==V[j+l])l++;
      if(l>=4){
       double e=cost(tabs[0],3)+vcost(tabs[4],(uint32_t(l)-4)*4+uint32_t(idx));
       if(ci+e<C[i+l]){C[i+l]=ci+e;CH[i+l]={3,uint32_t(l),uint32_t(idx)};RS[i+l]=shiftp(rp,d,idx);}
@@ -829,7 +844,7 @@ static vector<uint8_t> dp_tokenize(const uint8_t*a,size_t n,size_t window,int de
     }
    }
   }
-  if(i+3<=n)insert(i);
+  insert(j);
  }
  vector<DpChoice> path;
  {size_t i=n;while(i>0){DpChoice c=CH[i];path.push_back(c);i-=(c.kind==0?1:c.a);}}
@@ -839,8 +854,8 @@ static vector<uint8_t> dp_tokenize(const uint8_t*a,size_t n,size_t window,int de
   DpChoice c=path[k];
   if(c.kind==0){t.push_back(0);t.push_back(uint8_t(c.a));pos++;}
   else if(c.kind==2){t.push_back(2);varint(t,c.a);t.insert(t.end(),a+pos,a+pos+c.a);pos+=c.a;}
-  else if(c.kind==1){if(c.b==0||c.b>pos||pos+c.a>n)throw runtime_error("dp internal error");t.push_back(1);varint(t,c.a);varint(t,c.b);for(int q=3;q>0;q--)rep[q]=rep[q-1];rep[0]=c.b;pos+=c.a;}
-  else{if(c.b>3||pos+c.a>n)throw runtime_error("dp internal error");uint32_t d=rep[c.b];if(d==0||d>pos)throw runtime_error("dp internal error");t.push_back(3);varint(t,(c.a-4)*4+c.b);for(int q=int(c.b);q>0;q--)rep[q]=rep[q-1];rep[0]=d;pos+=c.a;}
+  else if(c.kind==1){if(c.b==0||c.b>pos+ds||pos+c.a>n)throw runtime_error("dp internal error");t.push_back(1);varint(t,c.a);varint(t,c.b);for(int q=3;q>0;q--)rep[q]=rep[q-1];rep[0]=c.b;pos+=c.a;}
+  else{if(c.b>3||pos+c.a>n)throw runtime_error("dp internal error");uint32_t d=rep[c.b];if(d==0||d>pos+ds)throw runtime_error("dp internal error");t.push_back(3);varint(t,(c.a-4)*4+c.b);for(int q=int(c.b);q>0;q--)rep[q]=rep[q-1];rep[0]=d;pos+=c.a;}
  }
  if(pos!=n)throw runtime_error("dp internal error");
  return t;
@@ -1008,7 +1023,9 @@ static vector<uint8_t> encode(const uint8_t*in,size_t insz,int level,size_t bs,s
    if(tailv[b].empty())ztv[b]=deflate_raw(tok[b].data(),tok[b].size(),level,nullptr,0);
    if(b>0&&!tok[b-1].empty()){
     size_t tn=tok[b-1].size(),dn=min<size_t>(tn,32768);
-    ztdv[b]=deflate_raw(tok[b].data(),tok[b].size(),level,tok[b-1].data()+tn-dn,dn);
+    if(tailv[b].empty())ztdv[b]=deflate_raw(tok[b].data(),tok[b].size(),level,tok[b-1].data()+tn-dn,dn);
+    // (tail blocks are excluded: mode 2's detokenize resolves distances against the
+    // previous TOKEN stream + trained dict only, it cannot resolve rolling-tail refs)
    }
    // rANS candidate: worth trying on sizable blocks (fixed table overhead);
    // at max also a DP-parse stream — keep whichever payload is smaller
@@ -1018,7 +1035,9 @@ static vector<uint8_t> encode(const uint8_t*in,size_t insz,int level,size_t bs,s
     vector<uint8_t> src;
     if(dp_on){
      RansTab tabs[6];build_tabs(tok[b],tabs);
-     src=dp_tokenize(a,n,window,depth,tabs);
+     const uint8_t*dpd=dict.data();size_t dpdn=dict.size();
+     if(dict.empty()&&!tailv[b].empty()){dpd=tailv[b].data();dpdn=tailv[b].size();}
+     src=dp_tokenize(a,n,window,depth,tabs,dpd,dpdn);
      TokenStreams sd;split_tokens(src,sd);
      zrv[b]=vconcat(tailhdr,rans_payload(sd));tc[b]=uint32_t(sd.tags.size());
      TokenStreams sg;split_tokens(tok[b],sg);
@@ -1032,42 +1051,14 @@ static vector<uint8_t> encode(const uint8_t*in,size_t insz,int level,size_t bs,s
   }
   z1v[b]=move(z1);
  });
- // mode 4 candidates (adaptive binary rANS): SERIAL in block order because the model
- // state persists across blocks — this keeps output identical for any thread count.
- // For the DP-vs-greedy choice each candidate is encoded against a snapshot of the
- // model; the winner's post-state is adopted, the loser's discarded.
- vector<vector<uint8_t>> z4v(nb);vector<uint32_t> tc4(nb,0);
- if(level==9||force_mode==4){
-  Mode4Ctx C4;
-  for(size_t b=0;b<nb;b++){
-   size_t off=b*bs,n=min(bs,insz-off);
-   if(tok[b].empty()||(n<16384&&force_mode!=4&&force_mode!=6))continue;
-   vector<uint8_t> tailhdr;
-   if(!tailv[b].empty())put32(tailhdr,uint32_t(tailv[b].size()));
-   // rans4_payload reconstructs the output for literal contexts, so match distances that
-   // reach into the rolling tail must resolve against it (same virtual buffer as tokenize)
-   const vector<uint8_t>&prefix=dict.empty()?tailv[b]:dict;
-   vector<uint8_t> pd,pg;uint32_t tcd=0,tcg=0;
-   if(dp_on){
-    RansTab tabs[6];build_tabs(tok[b],tabs);
-    vector<uint8_t> src=dp_tokenize(in+off,n,window,depth,tabs);
-    TokenStreams sd;split_tokens(src,sd);
-    Mode4Ctx Cdp=C4;
-    pd=vconcat(tailhdr,rans4_payload(src,Cdp,prefix));tcd=uint32_t(sd.tags.size());
-    if(pd.size()<pg.size()||pg.empty()){ /* decided below */ }
-    z4v[b]=pd;tc4[b]=tcd;
-    Mode4Ctx Cgr=C4;
-    pg=vconcat(tailhdr,rans4_payload(tok[b],Cgr,prefix));tcg=uint32_t(0);
-    TokenStreams sg;split_tokens(tok[b],sg);tcg=uint32_t(sg.tags.size());
-    if(pg.size()<z4v[b].size()){z4v[b]=move(pg);tc4[b]=tcg;C4=move(Cgr);}
-    else C4=move(Cdp);
-   }else{
-    TokenStreams sg;split_tokens(tok[b],sg);
-    z4v[b]=vconcat(tailhdr,rans4_payload(tok[b],C4,prefix));tc4[b]=uint32_t(sg.tags.size());
-   }
-  }
- }
  vector<uint8_t> winm(nb,0);
+ // The mode 4 candidate is encoded INSIDE this serial loop: the adaptive model state C4
+ // must advance only when a mode 4/6 block is actually written — exactly the decoder's
+ // view (decode_blocks evolves its copy on mode 4/6 blocks only). A candidate encoded
+ // against the running state is valid iff every previous mode 4/6 winner advanced the
+ // state the same way; losing candidates' post-states are discarded.
+ Mode4Ctx C4;
+ bool m4_phase=(level==9||force_mode==4||force_mode==6);
  for(size_t b=0;b<nb;b++){
   size_t off=b*bs,n=rn[b];
   vector<uint8_t> best(in+off,in+off+n);uint8_t m=0,fl=0;uint32_t tf=0;
@@ -1083,15 +1074,42 @@ static vector<uint8_t> encode(const uint8_t*in,size_t insz,int level,size_t bs,s
   uint8_t m3mode=tailv[b].empty()?3:5,m4mode=tailv[b].empty()?4:6;
   if(!zrv[b].empty()&&zrv[b].size()<best.size()){best=zrv[b];m=m3mode;fl=0;tf=tc[b];}
   // mode 4 candidate: token count stored in transformed
-  if(!z4v[b].empty()&&z4v[b].size()<best.size()){best=z4v[b];m=m4mode;fl=0;tf=tc4[b];}
+  if(m4_phase&&!tok[b].empty()&&(n>=16384||force_mode==4||force_mode==6)){
+   vector<uint8_t> tailhdr;
+   if(!tailv[b].empty())put32(tailhdr,uint32_t(tailv[b].size()));
+   // rans4_payload reconstructs the output for literal contexts, so match distances
+   // that reach into the rolling tail resolve against it (same virtual buffer)
+   const vector<uint8_t>&prefix=dict.empty()?tailv[b]:dict;
+   vector<uint8_t> z4;uint32_t tc4b=0;Mode4Ctx C4win;
+   if(dp_on){
+    RansTab tabs[6];build_tabs(tok[b],tabs);
+    const bool use_tail=dict.empty()&&!tailv[b].empty();
+    const uint8_t*dpd2=use_tail?tailv[b].data():dict.data();
+    size_t dpdn2=use_tail?tailv[b].size():dict.size();
+    vector<uint8_t> src=dp_tokenize(in+off,n,window,depth,tabs,dpd2,dpdn2);
+    TokenStreams sd;split_tokens(src,sd);
+    Mode4Ctx Cdp=C4;
+    vector<uint8_t> pd=vconcat(tailhdr,rans4_payload(src,Cdp,prefix));
+    Mode4Ctx Cgr=C4;
+    vector<uint8_t> pg=vconcat(tailhdr,rans4_payload(tok[b],Cgr,prefix));
+    TokenStreams sg;split_tokens(tok[b],sg);
+    if(pg.size()<pd.size()){z4=move(pg);tc4b=uint32_t(sg.tags.size());C4win=move(Cgr);}
+    else{z4=move(pd);tc4b=uint32_t(sd.tags.size());C4win=move(Cdp);}
+   }else{
+    TokenStreams sg;split_tokens(tok[b],sg);
+    C4win=C4;
+    z4=vconcat(tailhdr,rans4_payload(tok[b],C4win,prefix));
+    tc4b=uint32_t(sg.tags.size());
+   }
+   bool m4wins=(force_mode==4||force_mode==6)||z4.size()<best.size();
+   if(m4wins){best=move(z4);m=m4mode;fl=0;tf=tc4b;C4=move(C4win);}
+  }
   if(force_mode==2&&!ztv[b].empty()){best=ztv[b];m=2;fl=0;tf=uint32_t(tok[b].size());}
   if(force_mode==3&&!zrv[b].empty()&&tailv[b].empty()){best=zrv[b];m=3;fl=0;tf=tc[b];}
-  if(force_mode==4&&!z4v[b].empty()&&tailv[b].empty()){best=z4v[b];m=4;fl=0;tf=tc4[b];}
   // forced modes still write the ACTUAL payload kind: a block without a tail prefix is
-  // a plain mode 3/4 block even under force_mode=5/6 (the decoder reads the tail size
-  // from the payload prefix, so the mode byte must match the payload's real shape)
+  // a plain mode 3 block even under force_mode=5 (the decoder reads the tail size from
+  // the payload prefix, so the mode byte must match the payload's real shape)
   if(force_mode==5&&!zrv[b].empty()){best=zrv[b];m=m3mode;fl=0;tf=tc[b];}
-  if(force_mode==6&&!z4v[b].empty()){best=z4v[b];m=m4mode;fl=0;tf=tc4[b];}
   winm[b]=m;
   o.push_back(m);o.push_back(fl);put32(o,rn[b]);put32(o,uint32_t(best.size()));put32(o,tf);put32(o,sum[b]);
   o.insert(o.end(),best.begin(),best.end());
